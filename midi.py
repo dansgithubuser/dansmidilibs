@@ -311,6 +311,12 @@ def write(file_name, song):
 #=====helpers=====#
 import bisect
 
+class Index:
+	def __init__(self, midi, track, index):
+		self.midi=midi
+		self.track=track
+		self.index=index
+
 def empty_midi(staves=1, ticks_per_quarter=360):
 	return [[Event.make('ticks_per_quarter', 0, ticks_per_quarter)]]+[[] for i in range(staves)]
 
@@ -333,17 +339,15 @@ def previous_note(midi, track, ticks):
 	if index==-1: return
 	note=midi[track][index]
 	if note.ticks()>=ticks: return
-	return midi, track, index
+	return Index(midi, track, index)
 
 def remove_note(note):
-	midi, track, index=note
-	note=midi[track][index]
-	del midi[track][index]
-	return note
+	result=note.midi[note.track][note.index]
+	del note.midi[note.track][note.index]
+	return result
 
 def transpose_note(note, amount):
-	midi, track, index=note
-	midi[track][index].number(add=amount)
+	note.midi[note.track][note.index].number(add=amount)
 
 def notes_in(midi, track, ticks, duration, number=None, generous=False, track_end=None):
 	if track_end==None: track_end=track
@@ -358,15 +362,15 @@ def notes_in(midi, track, ticks, duration, number=None, generous=False, track_en
 			else:
 				if v.ticks()<ticks: continue#note starts before window starts
 				if v.ticks()+v.duration()>ticks+duration: continue#note ends after window ends
-			result.append((t, i))
+			result.append(Index(midi, t, i))
 	return result
 
 def delete(midi, notes):
-	notes=sorted(notes, key=lambda x: -x[1])
-	for track, i in notes: del midi[track][i]
+	notes=sorted(notes, key=lambda x: -x.index)
+	for note in notes: del midi[note.track][note.index]
 
 def transpose(midi, notes, amount):
-	for track, i in notes: midi[track][i].number(add=amount)
+	for note in notes: midi[note.track][note.index].number(add=amount)
 
 def deserialize_bytes(serialized):
 	return [int(i[:2], 16) for i in serialized.split()]
