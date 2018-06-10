@@ -317,6 +317,16 @@ class Index:
 		self.track=track
 		self.index=index
 
+	def __eq__(self, other):
+		if not isinstance(other, Index): return False
+		return self.midi is other.midi and self.track==other.track and self.index==other.index
+
+	def __hash__(self):
+		return id(self.midi)*1000000+self.track+100*self.index
+
+	def __repr__(self):
+		return 'Index({}, {}, {})'.format(id(self.midi), self.track, self.index)
+
 def empty_midi(staves=1, ticks_per_quarter=360):
 	return [[Event.make('ticks_per_quarter', 0, ticks_per_quarter)]]+[[] for i in range(staves)]
 
