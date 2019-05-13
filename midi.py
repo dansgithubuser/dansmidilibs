@@ -147,6 +147,18 @@ class Event:
 			add_etter(result, 'number', int)
 			result.channel(args[0])
 			result.number(args[1])
+		elif event_type=='control':
+			add_etter(result, 'channel', int)
+			add_etter(result, 'number', int)
+			add_etter(result, 'value', int)
+			result.channel(args[0])
+			result.number(args[1])
+			result.value(args[2])
+		elif event_type=='pitch_wheel':
+			add_etter(result, 'channel', int)
+			add_etter(result, 'value', int)
+			result.channel(args[0])
+			result.value(args[1])
 		else: raise Exception('invalid type')
 		return result
 
@@ -177,7 +189,8 @@ class Event:
 			'_minor',
 			'_duration',
 			'_channel',
-			'_number'
+			'_number',
+			'_value',
 		]]
 		attrs=['{}: {}'.format(i[1:], getattr(self, i)) for i in attrs]
 		return '{}({}; {})'.format(self._type, self._ticks, ', '.join(attrs))
@@ -213,13 +226,18 @@ def parse(bytes):
 		for i in range(len(pairs)):
 			pair=pairs[i]
 			ticks+=pair.delta()
-			if pair.event()[0]&0xf0==0x90 and pair.event()[2]!=0:#Note on
+			e=pair.event()
+			if e[0]&0xf0==0x90 and e[2]!=0:#Note on
 				duration=0
 				for j in pairs[i+1:]:
 					duration+=j.delta()
 					if j.event()[0]&0xf0==0x90 and j.event()[2]==0 or j.event()[0]&0xf0==0x80:#Note off
-						if pair.event()[1]==j.event()[1]: break
-				track+=[Event.make('note', ticks, duration, pair.event()[0]&0x0f, pair.event()[1])]
+						if e[1]==j.event()[1]: break
+				track+=[Event.make('note', ticks, duration, e[0]&0x0f, e[1])]
+			elif e[0]&0xf0==0xb0:
+				track+=[Event.make('control', ticks, e[0]&0x0f, e[1], e[2])]
+			elif e[0]&0xf0==0xe0:
+				track+=[Event.make('pitch_wheel', ticks, e[0]&0x0f, e[1]+(e[2]<<7))]
 		song+=[track]
 	return song
 
@@ -283,27 +301,38 @@ def write(file_name, song):
 		last_ticks=event.ticks()
 	write_track(file, bytes)
 	for track in song[1:]:
-		notes=[]
+		events=[]
 		for event in track:
-			if event.type()=='note': notes+=event.split_note()
-		notes.sort()
+			if event.type()=='note': events+=event.split_note()
+			else: events.append(event)
+		events.sort()
 		last_ticks=0
-		for i in range(len(notes)):
-			temp=notes[i].ticks()
-			notes[i].ticks(sub=last_ticks)
+		for i in range(len(events)):
+			temp=events[i].ticks()
+			events[i].ticks(sub=last_ticks)
 			last_ticks=temp
 		bytes=[]
-		for note in notes:
-			if note.type()=='note_on':
-				bytes+=write_delta(note.ticks())
-				bytes+=[0x90|note.channel()]
-				bytes+=[note.number()]
+		for event in events:
+			if event.type()=='note_on':
+				bytes+=write_delta(event.ticks())
+				bytes+=[0x90|event.channel()]
+				bytes+=[event.number()]
 				bytes+=[0x7f]
-			elif note.type()=='note_off':
-				bytes+=write_delta(note.ticks())
-				bytes+=[0x80|note.channel()]
-				bytes+=[note.number()]
+			elif event.type()=='note_off':
+				bytes+=write_delta(event.ticks())
+				bytes+=[0x80|event.channel()]
+				bytes+=[event.number()]
 				bytes+=[0]
+			elif event.type()=='control':
+				bytes+=write_delta(event.ticks())
+				bytes+=[0xb0|event.channel()]
+				bytes+=[event.number()]
+				bytes+=[event.value()]
+			elif event.type()=='pitch_wheel':
+				bytes+=write_delta(event.ticks())
+				bytes+=[0xe0|event.channel()]
+				bytes+=[event.value()&0x7f]
+				bytes+=[event.value()>>7]
 		write_track(file, bytes)
 	file.close()
 	return
