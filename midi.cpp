@@ -8,7 +8,7 @@
 
 #include <obvious.hpp>
 
-namespace dlal{
+namespace dans{
 
 static const unsigned TRACK_HEADER_SIZE=8;
 static const std::string TRACK_TITLE="MTrk";
@@ -336,29 +336,29 @@ std::vector<Midi::Pair> getPairs(Midi::Track track){
 	return result;
 }
 
-};//namespace dlal
+};//namespace dans
 
-std::ostream& operator<<(std::ostream& o, const dlal::Midi::Event& event){
+std::ostream& operator<<(std::ostream& o, const dans::Midi::Event& event){
 	switch(event.type){
-		case dlal::Midi::Event::TEMPO:
+		case dans::Midi::Event::TEMPO:
 			o<<"tempo("   <<event.ticks<<"; "<<event.usPerQuarter<<")";
 			break;
-		case dlal::Midi::Event::TIME_SIG:
+		case dans::Midi::Event::TIME_SIG:
 			o<<"time_sig("<<event.ticks<<"; "<<(int)event.timeSigTop<<", "<<(int)event.timeSigBottom<<")";
 			break;
-		case dlal::Midi::Event::KEY_SIG:
+		case dans::Midi::Event::KEY_SIG:
 			o<<"key_sig(" <<event.ticks<<"; "<<event.sharps<<", "<<event.minor<<")";
 			break;
-		case dlal::Midi::Event::NOTE:
+		case dans::Midi::Event::NOTE:
 			o<<"note("    <<event.ticks<<"; "<<(int)event.note<<", "<<(int)event.velocityDown<<", "<<(int)event.duration<<", "<<(int)event.velocityUp<<")";
 			break;
-		case dlal::Midi::Event::NOTE_ON:
+		case dans::Midi::Event::NOTE_ON:
 			o<<"note_on(" <<event.ticks<<"; "<<(int)event.note<<", "<<(int)event.velocityDown<<")";
 			break;
-		case dlal::Midi::Event::NOTE_OFF:
+		case dans::Midi::Event::NOTE_OFF:
 			o<<"note_off("<<event.ticks<<"; "<<(int)event.note<<", "<<(int)event.velocityUp<<")";
 			break;
-		case dlal::Midi::Event::SENTINEL:
+		case dans::Midi::Event::SENTINEL:
 			o<<"sentinel";
 			break;
 		default:
@@ -368,6 +368,6 @@ std::ostream& operator<<(std::ostream& o, const dlal::Midi::Event& event){
 	return o;
 }
 
-std::ostream& operator<<(std::ostream& o, const dlal::Midi::Pair& pair){
+std::ostream& operator<<(std::ostream& o, const dans::Midi::Pair& pair){
 	return o<<"{"<<pair.delta<<", "<<pair.event<<"}";
 }

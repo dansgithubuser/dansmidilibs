@@ -1,12 +1,12 @@
-#ifndef DLAL_MIDI_HPP_INCLUDED
-#define DLAL_MIDI_HPP_INCLUDED
+#ifndef DANS_MIDI_HPP_INCLUDED
+#define DANS_MIDI_HPP_INCLUDED
 
 #include <cstdint>
 #include <iostream>
 #include <string>
 #include <vector>
 
-namespace dlal{
+namespace dans{
 
 class Midi{
 	public:
@@ -69,9 +69,9 @@ class Midi{
 void splitNotes(Midi::Track&);
 std::vector<Midi::Pair> getPairs(Midi::Track);
 
-}//namespace dlal
+}//namespace dans
 
-std::ostream& operator<<(std::ostream& o, const dlal::Midi::Event& event);
-std::ostream& operator<<(std::ostream& o, const dlal::Midi::Pair& pair);
+std::ostream& operator<<(std::ostream& o, const dans::Midi::Event& event);
+std::ostream& operator<<(std::ostream& o, const dans::Midi::Pair& pair);
 
 #endif
