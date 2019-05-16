@@ -16,6 +16,8 @@ class Midi{
 				Event(int ticks): ticks(ticks) {}
 				Event(int ticks, const std::vector<uint8_t>& data);
 
+				std::string str() const;
+
 				bool operator<(const Event& other) const;
 
 				Event& setTempo(int _){ type=TEMPO; usPerQuarter=_; return *this; }
@@ -47,7 +49,11 @@ class Midi{
 					};
 				};
 		};
-		struct Pair{ int delta; std::vector<uint8_t> event; };
+		struct Pair{
+			std::string str() const;
+			int delta;
+			std::vector<uint8_t> event;
+		};
 		typedef std::vector<Event> Track;
 
 		Midi(): ticksPerQuarter(360) {}
@@ -70,8 +76,5 @@ void splitNotes(Midi::Track&);
 std::vector<Midi::Pair> getPairs(Midi::Track);
 
 }//namespace dans
-
-std::ostream& operator<<(std::ostream& o, const dans::Midi::Event& event);
-std::ostream& operator<<(std::ostream& o, const dans::Midi::Pair& pair);
 
 #endif

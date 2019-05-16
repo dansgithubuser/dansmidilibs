@@ -156,6 +156,37 @@ Midi::Event::Event(int ticks, const std::vector<uint8_t>& data): ticks(ticks) {
 	}
 }
 
+std::string Midi::Event::str() const {
+	std::stringstream ss;
+	switch(type){
+		case TEMPO:
+			ss<<"tempo("   <<ticks<<"; "<<usPerQuarter<<")";
+			break;
+		case TIME_SIG:
+			ss<<"time_sig("<<ticks<<"; "<<(int)timeSigTop<<", "<<(int)timeSigBottom<<")";
+			break;
+		case KEY_SIG:
+			ss<<"key_sig(" <<ticks<<"; "<<sharps<<", "<<minor<<")";
+			break;
+		case NOTE:
+			ss<<"note("    <<ticks<<"; "<<(int)note<<", "<<(int)velocityDown<<", "<<(int)duration<<", "<<(int)velocityUp<<")";
+			break;
+		case NOTE_ON:
+			ss<<"note_on(" <<ticks<<"; "<<(int)note<<", "<<(int)velocityDown<<")";
+			break;
+		case NOTE_OFF:
+			ss<<"note_off("<<ticks<<"; "<<(int)note<<", "<<(int)velocityUp<<")";
+			break;
+		case SENTINEL:
+			ss<<"sentinel";
+			break;
+		default:
+			ss<<"bad";
+			break;
+	}
+	return ss.str();
+}
+
 bool Midi::Event::operator<(const Event& other) const {
 	if(ticks==other.ticks){
 		if(type==NOTE_OFF&&other.type==NOTE_ON) return true;
@@ -201,6 +232,10 @@ void Midi::Event::write(std::vector<uint8_t>& written) const {
 int Midi::Event::end() const {
 	if(type==NOTE) return ticks+duration;
 	return ticks;
+}
+
+std::string Midi::Pair::str() const {
+	return strs("{", delta, ", ", event, "}");
 }
 
 void Midi::append(unsigned track, int delta, const Midi::Event& event){
@@ -337,37 +372,3 @@ std::vector<Midi::Pair> getPairs(Midi::Track track){
 }
 
 };//namespace dans
-
-std::ostream& operator<<(std::ostream& o, const dans::Midi::Event& event){
-	switch(event.type){
-		case dans::Midi::Event::TEMPO:
-			o<<"tempo("   <<event.ticks<<"; "<<event.usPerQuarter<<")";
-			break;
-		case dans::Midi::Event::TIME_SIG:
-			o<<"time_sig("<<event.ticks<<"; "<<(int)event.timeSigTop<<", "<<(int)event.timeSigBottom<<")";
-			break;
-		case dans::Midi::Event::KEY_SIG:
-			o<<"key_sig(" <<event.ticks<<"; "<<event.sharps<<", "<<event.minor<<")";
-			break;
-		case dans::Midi::Event::NOTE:
-			o<<"note("    <<event.ticks<<"; "<<(int)event.note<<", "<<(int)event.velocityDown<<", "<<(int)event.duration<<", "<<(int)event.velocityUp<<")";
-			break;
-		case dans::Midi::Event::NOTE_ON:
-			o<<"note_on(" <<event.ticks<<"; "<<(int)event.note<<", "<<(int)event.velocityDown<<")";
-			break;
-		case dans::Midi::Event::NOTE_OFF:
-			o<<"note_off("<<event.ticks<<"; "<<(int)event.note<<", "<<(int)event.velocityUp<<")";
-			break;
-		case dans::Midi::Event::SENTINEL:
-			o<<"sentinel";
-			break;
-		default:
-			o<<"bad";
-			break;
-	}
-	return o;
-}
-
-std::ostream& operator<<(std::ostream& o, const dans::Midi::Pair& pair){
-	return o<<"{"<<pair.delta<<", "<<pair.event<<"}";
-}
