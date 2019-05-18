@@ -139,19 +139,27 @@ class Event:
 			add_etter(result, 'duration', int)
 			add_etter(result, 'channel', int, quartet)
 			add_etter(result, 'number', int, septet)
+			add_etter(result, 'velocity_on', int, septet)
+			add_etter(result, 'velocity_off', int, septet)
 			result.duration(args[0])
 			result.channel(args[1])
 			result.number(args[2])
+			result.velocity_on(args[3])
+			result.velocity_off(args[4])
 		elif event_type=='note_on':
 			add_etter(result, 'channel', int, quartet)
 			add_etter(result, 'number', int, septet)
+			add_etter(result, 'velocity', int, septet)
 			result.channel(args[0])
 			result.number(args[1])
+			result.velocity(args[2])
 		elif event_type=='note_off':
 			add_etter(result, 'channel', int, quartet)
 			add_etter(result, 'number', int, septet)
+			add_etter(result, 'velocity', int, septet)
 			result.channel(args[0])
 			result.number(args[1])
+			result.velocity(args[2])
 		elif event_type=='control':
 			add_etter(result, 'channel', int, quartet)
 			add_etter(result, 'number', int, septet)
@@ -170,8 +178,8 @@ class Event:
 	def split_note(self):
 		assert self._type=='note'
 		return [
-			Event.make('note_on' , self._ticks               , self._channel, self._number),
-			Event.make('note_off', self._ticks+self._duration, self._channel, self._number)
+			Event.make('note_on' , self._ticks               , self._channel, self._number, self._velocity_on),
+			Event.make('note_off', self._ticks+self._duration, self._channel, self._number, self._velocity_off)
 		]
 
 	def end_of_note(self):
@@ -234,11 +242,15 @@ def parse(bytes):
 			e=pair.event()
 			if e[0]&0xf0==0x90 and e[2]!=0:#Note on
 				duration=0
+				velocity_off=0x40
 				for j in pairs[i+1:]:
 					duration+=j.delta()
 					if j.event()[0]&0xf0==0x90 and j.event()[2]==0 or j.event()[0]&0xf0==0x80:#Note off
-						if e[1]==j.event()[1]: break
-				track+=[Event.make('note', ticks, duration, e[0]&0x0f, e[1])]
+						if e[1]==j.event()[1]:
+							velocity_off=j.event()[2]
+							if j.event()[0]&0xf0==0x90: velocity_off=0x40
+							break
+				track+=[Event.make('note', ticks, duration, e[0]&0x0f, e[1], e[2], velocity_off)]
 			elif e[0]&0xf0==0xb0:
 				track+=[Event.make('control', ticks, e[0]&0x0f, e[1], e[2])]
 			elif e[0]&0xf0==0xe0:
@@ -322,12 +334,12 @@ def write(file_name, song):
 				bytes+=write_delta(event.ticks())
 				bytes+=[0x90|event.channel()]
 				bytes+=[event.number()]
-				bytes+=[0x7f]
+				bytes+=[event.velocity()]
 			elif event.type()=='note_off':
 				bytes+=write_delta(event.ticks())
 				bytes+=[0x80|event.channel()]
 				bytes+=[event.number()]
-				bytes+=[0]
+				bytes+=[event.velocity()]
 			elif event.type()=='control':
 				bytes+=write_delta(event.ticks())
 				bytes+=[0xb0|event.channel()]
@@ -372,9 +384,9 @@ def add_event(track, event):
 	assert isinstance(event, Event)
 	bisect.insort(track, event)
 
-def add_note(midi, track, ticks, duration, number, channel=None):
+def add_note(midi, track, ticks, duration, number, channel=None, velocity_on=0x40, velocity_off=0x40):
 	if channel==None: channel=track-1
-	add_event(midi[track], Event.make('note', ticks, duration, channel, number))
+	add_event(midi[track], Event.make('note', ticks, duration, channel, number, velocity_on, velocity_off))
 
 def previous_note(midi, track, ticks):
 	event=Event()
@@ -421,6 +433,9 @@ def translate(midi, notes, ticks):
 
 def durate(midi, notes, ticks):
 	for note in notes: midi[note.track][note.index].duration(ticks)
+
+def set_velocity_on(midi, notes, velocity):
+	for note in notes: midi[note.track][note.index].velocity_on(velocity)
 
 def deserialize_bytes(serialized):
 	return [int(i[:2], 16) for i in serialized.split()]
