@@ -106,6 +106,11 @@ def chunkitize(bytes):
 	if big_endian_to_unsigned(bytes[10:12])!=len(chunks)-1: raise Exception('bad size')
 	return chunks
 
+def solo(v): return 0<=v<=0x1
+def quartet(v): return 0<=v<=0xf
+def septet(v): return 0<=v<=0x7f
+def double_septet(v): return 0<=v<=0x3fff
+
 class Event:
 	@staticmethod
 	def make(event_type, ticks, *args):
@@ -121,42 +126,42 @@ class Event:
 			add_etter(result, 'us_per_quarter', int)
 			result.us_per_quarter(args[0])
 		elif event_type=='time_sig':
-			add_etter(result, 'top', int)
-			add_etter(result, 'bottom', int)
+			add_etter(result, 'top', int, septet)
+			add_etter(result, 'bottom', int, septet)
 			result.top(args[0])
 			result.bottom(args[1])
 		elif event_type=='key_sig':
-			add_etter(result, 'sharps', int)
-			add_etter(result, 'minor', int)
+			add_etter(result, 'sharps', int, septet)
+			add_etter(result, 'minor', int, solo)
 			result.sharps(args[0])
 			result.minor(args[1])
 		elif event_type=='note':
 			add_etter(result, 'duration', int)
-			add_etter(result, 'channel', int)
-			add_etter(result, 'number', int)
+			add_etter(result, 'channel', int, quartet)
+			add_etter(result, 'number', int, septet)
 			result.duration(args[0])
 			result.channel(args[1])
 			result.number(args[2])
 		elif event_type=='note_on':
-			add_etter(result, 'channel', int)
-			add_etter(result, 'number', int)
+			add_etter(result, 'channel', int, quartet)
+			add_etter(result, 'number', int, septet)
 			result.channel(args[0])
 			result.number(args[1])
 		elif event_type=='note_off':
-			add_etter(result, 'channel', int)
-			add_etter(result, 'number', int)
+			add_etter(result, 'channel', int, quartet)
+			add_etter(result, 'number', int, septet)
 			result.channel(args[0])
 			result.number(args[1])
 		elif event_type=='control':
-			add_etter(result, 'channel', int)
-			add_etter(result, 'number', int)
-			add_etter(result, 'value', int)
+			add_etter(result, 'channel', int, quartet)
+			add_etter(result, 'number', int, septet)
+			add_etter(result, 'value', int, septet)
 			result.channel(args[0])
 			result.number(args[1])
 			result.value(args[2])
 		elif event_type=='pitch_wheel':
-			add_etter(result, 'channel', int)
-			add_etter(result, 'value', int)
+			add_etter(result, 'channel', int, quartet)
+			add_etter(result, 'value', int, double_septet)
 			result.channel(args[0])
 			result.value(args[1])
 		else: raise Exception('invalid type')
