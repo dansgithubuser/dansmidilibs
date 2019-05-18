@@ -411,6 +411,12 @@ def delete(midi, notes):
 def transpose(midi, notes, amount):
 	for note in notes: midi[note.track][note.index].number(add=amount)
 
+def translate(midi, notes, ticks):
+	for note in notes: midi[note.track][note.index].ticks(add=ticks)
+
+def durate(midi, notes, ticks):
+	for note in notes: midi[note.track][note.index].duration(ticks)
+
 def deserialize_bytes(serialized):
 	return [int(i[:2], 16) for i in serialized.split()]
 
