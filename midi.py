@@ -422,9 +422,10 @@ def deserialize_bytes(serialized):
 
 def quantize(midi, divisor=4):
 	quantum=ticks_per_quarter(midi)//divisor
-	def quantize_etter(etter): etter(quantum*(etter()//quantum))
+	def quantize_etter(etter, minimum=0):
+		etter(quantum*max(round(etter()/quantum), minimum))
 	for track in midi:
 		for event in track:
 			quantize_etter(event.ticks)
 			if event.type()=='note':
-				quantize_etter(event.duration)
+				quantize_etter(event.duration, 1)
