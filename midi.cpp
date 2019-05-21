@@ -188,11 +188,12 @@ std::string Midi::Event::str() const {
 }
 
 bool Midi::Event::operator<(const Event& other) const {
-	if(ticks==other.ticks){
-		if(type==NOTE_OFF&&other.type==NOTE_ON) return true;
-		if(type==NOTE_ON&&other.type==NOTE_OFF) return false;
-	}
-	return ticks<other.ticks;
+	if(ticks!=other.ticks) return ticks<other.ticks;
+	if(type==NOTE_OFF&&other.type==NOTE_ON) return true;
+	if(type==NOTE_ON&&other.type==NOTE_OFF) return false;
+	if(type!=other.type) return type<other.type;
+	if(type==NOTE||type==NOTE_ON||type==NOTE_OFF) return note<other.note;
+	return false;
 }
 
 static uint8_t ilog2(int x){
