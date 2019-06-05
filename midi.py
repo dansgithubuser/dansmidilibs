@@ -1,3 +1,5 @@
+import copy
+
 track_header_size=8
 
 def read_delta(bytes, i):
@@ -185,6 +187,11 @@ class Event:
 	def end_of_note(self):
 		assert self._type=='note'
 		return self._ticks+self._duration
+
+	def __eq__(self, other):
+		a = {k: v for k, v in self.__dict__.items() if k.startswith('_')}
+		b = {k: v for k, v in other.__dict__.items() if k.startswith('_')}
+		return a == b
 
 	def __lt__(self, other):
 		if self._ticks==other._ticks:
@@ -449,3 +456,9 @@ def quantize(midi, divisor=4):
 			quantize_etter(event.ticks)
 			if event.type()=='note':
 				quantize_etter(event.duration, 1)
+
+def combine(midi_a, midi_b):
+	assert midi_a[0] == midi_b[0]
+	combined = copy.deepcopy(midi_a)
+	combined.extend(midi_b[1:])
+	return combined
