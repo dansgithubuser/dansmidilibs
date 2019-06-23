@@ -48,10 +48,16 @@ static int readDelta(const Bytes& bytes, unsigned& i){
 static std::vector<Midi::Pair> getPairs(const Bytes& trackChunk){
 	std::vector<Midi::Pair> pairs;
 	unsigned i=TRACK_HEADER_SIZE;
-	uint8_t status=0;
+	uint8_t runningStatus=0;
 	while(i<trackChunk.size()){
 		auto delta=readDelta(trackChunk, i);
-		if(trackChunk.at(i)&0xf0) status=trackChunk.at(i++);
+		uint8_t status;
+		if(trackChunk.at(i)&0x80){
+			status=trackChunk.at(i);
+			if(status&0xf0!=0xf0) runningStatus=status;
+			++i;
+		}
+		else status=runningStatus;
 		Bytes event;
 		event.push_back(status);
 		switch(status&0xf0){
@@ -278,7 +284,6 @@ void Midi::read(const Bytes& bytes){
 	ticksPerQuarter=bigEndianToUnsigned(chunks.at(0).begin()+12, 2);
 	if(ticksPerQuarter==0) throw std::runtime_error("invalid ticks per quarter");
 	if(bigEndianToUnsigned(chunks.at(0).begin()+8, 2)!=1) throw std::runtime_error("unhandled file type");
-	if(chunks.size()<2) return;
 	for(unsigned i=1; i<chunks.size(); i++){//for all tracks
 		int ticks=0;
 		std::vector<Pair> pairs=getPairs(chunks.at(i));

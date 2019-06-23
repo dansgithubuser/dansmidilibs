@@ -58,11 +58,14 @@ def get_pairs(track_chunk):
 track_chunk is assumed to have come from a track chunk produced by chunkitize.'''
 	pairs=[]
 	i=track_header_size
-	status=None
+	running_status=None
 	while i<len(track_chunk):
 		delta, i=read_delta(track_chunk, i)
-		x=track_chunk[i]
-		if x&0xf0: status=x; i+=1
+		if track_chunk[i]&0x80:
+			status=track_chunk[i]
+			if status&0xf0!=0xf0: running_status=status
+			i+=1
+		else: status=running_status
 		if status&0xf0 in [0x80,0x90,0xa0,0xb0,0xe0]:
 			parameters=track_chunk[i:i+2]
 			i+=2
