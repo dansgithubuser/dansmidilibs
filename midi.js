@@ -43,11 +43,15 @@ export class Midi {
         };
         if (this.tapMode == 'add') {
           this._addEvent(this._trackIndexFromY(y), makeNote());
-        } else if (this.tapMode == 'delete' || this.tapMode == 'toggle') {
+        } else {
           const trackIndex = this._trackIndexFromY(y);
           const eventIndex = this._getNoteIndex(trackIndex, this._ticksFromX(x), this._noteNumberFromY(y));
-          if (eventIndex != undefined) this._deleteEvent(trackIndex, eventIndex);
-          else if (this.tapMode == 'toggle') this._addEvent(trackIndex, makeNote());
+          if (eventIndex != undefined) {
+            if (['toggle', 'delete'].includes(this.tapMode)) this._deleteEvent(trackIndex, eventIndex);
+            else if (this.tapMode == 'select') this._selectEvent(trackIndex, eventIndex);
+          } else {
+            if (this.tapMode == 'toggle') this._addEvent(trackIndex, makeNote());
+          }
         }
         this._render();
       },
@@ -83,6 +87,7 @@ export class Midi {
       trackD: 4,
       notesPerStaff: 24,
     };
+    this._selected = [];
   }
 
   //----- from bytes -----//
@@ -400,7 +405,14 @@ export class Midi {
       // events
       for (const note of track.events) {
         if (note.type != 'note') continue;
-        this._renderNote(note.ticks, note.duration, trackIndex, track.octave, note.number, 'rgb(0, 128, 128)');
+        this._renderNote(
+          note.ticks,
+          note.duration,
+          trackIndex,
+          track.octave,
+          note.number,
+          note.selected ? 'rgb(255, 255, 255)' : 'rgb(0, 128, 128)',
+        );
       }
       this._renderEvents(track.events.filter((i) => i.type != 'note'), trackIndex);
     }
@@ -501,6 +513,25 @@ export class Midi {
     this._render();
   }
 
+  deselect() {
+    for (const i of this._selected)
+      this._tracks[i[0]].events[i[1]].selected = false;
+    this._selected = [];
+    this._render();
+  }
+
+  transpose(amount) {
+    if (typeof amount == 'string') amount = parseInt(amount);
+    for (const i of this._selected) {
+      var n = this._tracks[i[0]].events[i[1]].number;
+      n += amount;
+      if (n < 0) n = 0;
+      if (n > 127) n = 127;
+      this._tracks[i[0]].events[i[1]].number = n;
+    }
+    this._render();
+  }
+
   _addEvent(trackIndex, event) {
     if (trackIndex >= this._tracks.length) return;
     const track = this._tracks[trackIndex];
@@ -544,5 +575,10 @@ export class Midi {
 
   _deleteEvent(trackIndex, eventIndex) {
     this._tracks[trackIndex].events.splice(eventIndex, 1);
+  }
+
+  _selectEvent(trackIndex, eventIndex) {
+    this._tracks[trackIndex].events[eventIndex].selected = true;
+    this._selected.push([trackIndex, eventIndex]);
   }
 }
