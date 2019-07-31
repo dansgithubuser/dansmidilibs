@@ -18,7 +18,10 @@ class Track {
       if (event.ticks > ticksF) break;
       lowest = Math.min(event.number, lowest);
     }
-    this.octave = Math.floor(lowest / 12);
+    if (lowest == 128)
+      this.octave = 5;
+    else
+      this.octave = Math.floor(lowest / 12);
   }
 };
 
@@ -493,14 +496,20 @@ export class Midi {
   }
 
   //----- editing -----//
+  addTrack() {
+    this._tracks.push(new Track);
+    this._render();
+  }
+
   _addEvent(trackIndex, event) {
     if (trackIndex >= this._tracks.length) return;
     const track = this._tracks[trackIndex];
     for (var i = 0; i < track.events.length; ++i)
       if (track.events[i].ticks > event.ticks) {
         track.events.splice(i, 0, event);
-        break;
+        return;
       }
+    track.events.push(event);
   }
 
   _ticksFromX(x) {
