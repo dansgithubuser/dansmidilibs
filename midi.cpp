@@ -54,7 +54,7 @@ static std::vector<Midi::Pair> getPairs(const Bytes& trackChunk){
 		uint8_t status;
 		if(trackChunk.at(i)&0x80){
 			status=trackChunk.at(i);
-			if(status&0xf0!=0xf0) runningStatus=status;
+			if((status&0xf0)!=0xf0) runningStatus=status;
 			++i;
 		}
 		else status=runningStatus;
