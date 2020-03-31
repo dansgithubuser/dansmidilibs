@@ -1,467 +1,207 @@
-import copy
+_track_header_size = 8
 
-track_header_size=8
+def _big_endian_to_unsigned(big_endian_bytes):
+    result = 0
+    for byte in big_endian_bytes:
+        result <<= 8
+        result += byte
+    return result
 
-def read_delta(bytes, i):
-	'''Return (delta, i) where
-delta is the delta ticks encoded starting from bytes[0] and
-i is incremented by the length of the delta in bytes.'''
-	result=0
-	for i in range(i, i+4):
-		result<<=7
-		result+=bytes[i]&0x7f
-		if not bytes[i]&0x80: break
-	else: raise Exception('delta too big')
-	return (result, i+1)
+def _to_big_endian(unsigned, size):
+    def extract_byte(unsigned, i):
+        return unsigned >> i * 8 & 0xff
+    return bytes([
+        extract_byte(unsigned, size - 1 - i)
+        for i in range(size)
+    ])
 
-def write_delta(ticks):
-	'Return the bytes that specify a delta equal to ticks.'
-	result=[]
-	for i in range(4):
-		byte=ticks&0x7f
-		ticks=ticks>>7
-		result=[byte]+result
-		if ticks==0:
-			for i in range(len(result)-1): result[i]|=0x80
-			return result
-	else: raise Exception('delta too big')
+def _chunkitize(file_bytes):
+    header_length = 14
+    header_title = b'MThd'
+    if len(file_bytes) < header_length:
+        raise Exception('header too short')
+    if file_bytes[0:len(header_title)] != header_title:
+        raise(Exception('bad header'))
+    chunks = [file_bytes[:header_length]]
+    track_title = b'MTrk'
+    index = header_length
+    while len(file_bytes) >= index + _track_header_size:
+        if file_bytes[index:index+len(track_title)] != track_title:
+            raise Exception('bad track header')
+        track_size = _big_endian_to_unsigned(file_bytes[index+4:index+8])
+        if len(file_bytes) < index + _track_header_size + track_size:
+            raise Exception('track too long')
+        chunks.append(file_bytes[index:index+_track_header_size+track_size])
+        index += _track_header_size + track_size
+    if index != len(file_bytes): raise Exception('malformed tracks')
+    if _big_endian_to_unsigned(file_bytes[10:12]) != len(chunks) - 1:
+        raise Exception('bad size')
+    return chunks
 
-def add_etter(instance, name, desired_type, further_check=None):
-	def etter(self, value=None, add=None, sub=None):
-		if sub is not None:
-			if add is not None: raise Exception('value is being both added and subbed')
-			add=-sub
-		if add is not None:
-			if value is not None: raise Exception('value is being both set and accumulated')
-			value=getattr(self, '_'+name, value)+add
-		if value is not None:
-			if type(value)!=desired_type:
-				raise Exception('tried setting {} {} to value of type {}'.format(desired_type, name, type(value)))
-			if further_check:
-				if not further_check(value):
-					raise Exception('further check failed when setting {} to {}'.format(name, value))
-			setattr(self, '_'+name, value)
-		return getattr(self, '_'+name)
-	from types import MethodType
-	setattr(instance, name, MethodType(etter, instance))
+def _write_track(file, track_bytes):
+    if track_bytes[-4:] != [0x01, 0xff, 0x2f, 0x00]:
+        track_bytes += [0x01, 0xff, 0x2f, 0x00]
+    track_header = b'MTrk' + _to_big_endian(len(track_bytes), 4)
+    file.write(track_header + bytes(track_bytes))
 
-class Pair:
-	'The track unit: a delta and MIDI event pair.'
-	def __init__(self, delta, event):
-		add_etter(self, 'delta', int)
-		add_etter(self, 'event', list, further_check=lambda v: all([type(i)==int for i in v]))
-		self.delta(delta)
-		self.event(event)
+class Deltamsg:
+    def delta(self):
+        return self._delta
 
-def get_pairs(track_chunk):
-	'''Return the pairs in track_chunk in a list.
-track_chunk is assumed to have come from a track chunk produced by chunkitize.'''
-	pairs=[]
-	i=track_header_size
-	running_status=None
-	while i<len(track_chunk):
-		delta, i=read_delta(track_chunk, i)
-		if track_chunk[i]&0x80:
-			status=track_chunk[i]
-			if status&0xf0!=0xf0: running_status=status
-			i+=1
-		else: status=running_status
-		if status&0xf0 in [0x80,0x90,0xa0,0xb0,0xe0]:
-			parameters=track_chunk[i:i+2]
-			i+=2
-		elif status&0xf0 in [0xc0,0xd0]:
-			parameters=track_chunk[i:i+1]
-			i+=1
-		elif status&0xf0==0xf0:
-			if status==0xff:
-				l=2+track_chunk[i+1]
-				parameters=track_chunk[i:i+l]
-				i+=l
-			else:
-				parameters=[]
-		pairs.append(Pair(delta, [status]+parameters))
-	if pairs[-1].event()!=[0xff, 0x2f, 0x00]: raise Exception('invalid last command')
-	return pairs
+    def delta_bytes(self):
+        result = []
+        delta = self.delta()
+        for i in range(4):
+            byte = delta & 0x7f
+            delta >>= 7
+            result = [byte] + result
+            if delta == 0:
+                for i in range(len(result) - 1): result[i] |= 0x80
+                return result
+        raise Exception('delta too big')
 
-#return an unsigned integer from a big-endian string of bytes
-def big_endian_to_unsigned(bytes):
-	result=0
-	for byte in bytes:
-		result<<=8
-		result+=byte
-	return result
+    def msg(self):
+        return list(self._msg)
 
-#return a list of lists of MIDI file bytes, separated into the header and tracks
-def chunkitize(bytes):
-	header_length=14
-	header_title=[ord(i) for i in 'MThd']
-	if len(bytes)<header_length: raise Exception('header too short')
-	if bytes[0:len(header_title)]!=header_title: raise(Exception('bad header'))
-	chunks=[bytes[0:header_length]]
-	track_title=[ord(i) for i in 'MTrk']
-	i=header_length
-	global track_header_size
-	while len(bytes)>=i+track_header_size:
-		if bytes[i:i+len(track_title)]!=track_title: raise Exception('bad track header')
-		track_size=big_endian_to_unsigned(bytes[i+4:i+8])
-		if len(bytes)<i+track_header_size+track_size: raise Exception('track too long')
-		chunks+=[bytes[i:i+track_header_size+track_size]]
-		i+=track_header_size+track_size
-	if i!=len(bytes): raise Exception('malformed tracks')
-	if big_endian_to_unsigned(bytes[10:12])!=len(chunks)-1: raise Exception('bad size')
-	return chunks
+    def status(self):
+        return self._msg[0]
 
-def solo(v): return 0<=v<=0x1
-def quartet(v): return 0<=v<=0xf
-def septet(v): return 0<=v<=0x7f
-def double_septet(v): return 0<=v<=0x3fff
+    def type_nibble(self):
+        return self.status() & 0xf0
 
-class Event:
-	@staticmethod
-	def make(event_type, ticks, *args):
-		result=Event()
-		add_etter(result, 'type', str)
-		add_etter(result, 'ticks', int)
-		result.type(event_type)
-		result.ticks(ticks)
-		if event_type=='ticks_per_quarter':
-			add_etter(result, 'ticks_per_quarter', int)
-			result.ticks_per_quarter(args[0])
-		elif event_type=='tempo':
-			add_etter(result, 'us_per_quarter', int)
-			result.us_per_quarter(args[0])
-		elif event_type=='time_sig':
-			add_etter(result, 'top', int, septet)
-			add_etter(result, 'bottom', int, septet)
-			result.top(args[0])
-			result.bottom(args[1])
-		elif event_type=='key_sig':
-			add_etter(result, 'sharps', int, septet)
-			add_etter(result, 'minor', int, solo)
-			result.sharps(args[0])
-			result.minor(args[1])
-		elif event_type=='note':
-			add_etter(result, 'duration', int)
-			add_etter(result, 'channel', int, quartet)
-			add_etter(result, 'number', int, septet)
-			add_etter(result, 'velocity_on', int, septet)
-			add_etter(result, 'velocity_off', int, septet)
-			result.duration(args[0])
-			result.channel(args[1])
-			result.number(args[2])
-			result.velocity_on(args[3])
-			result.velocity_off(args[4])
-		elif event_type=='note_on':
-			add_etter(result, 'channel', int, quartet)
-			add_etter(result, 'number', int, septet)
-			add_etter(result, 'velocity', int, septet)
-			result.channel(args[0])
-			result.number(args[1])
-			result.velocity(args[2])
-		elif event_type=='note_off':
-			add_etter(result, 'channel', int, quartet)
-			add_etter(result, 'number', int, septet)
-			add_etter(result, 'velocity', int, septet)
-			result.channel(args[0])
-			result.number(args[1])
-			result.velocity(args[2])
-		elif event_type=='control':
-			add_etter(result, 'channel', int, quartet)
-			add_etter(result, 'number', int, septet)
-			add_etter(result, 'value', int, septet)
-			result.channel(args[0])
-			result.number(args[1])
-			result.value(args[2])
-		elif event_type=='pitch_wheel':
-			add_etter(result, 'channel', int, quartet)
-			add_etter(result, 'value', int, double_septet)
-			result.channel(args[0])
-			result.value(args[1])
-		else: raise Exception('invalid type')
-		return result
+    def channel(self):
+        if self.type_nibble() == 0xf0:
+            raise Exception("system messages don't have a channel")
+        return self.status() & 0x0f
 
-	def split_note(self):
-		assert self._type=='note'
-		return [
-			Event.make('note_on' , self._ticks               , self._channel, self._number, self._velocity_on),
-			Event.make('note_off', self._ticks+self._duration, self._channel, self._number, self._velocity_off)
-		]
+    def meta_type(self):
+        if self.status() != 0xff:
+            raise Exception('not meta')
+        return self._msg[1]
 
-	def end_of_note(self):
-		assert self._type=='note'
-		return self._ticks+self._duration
+    def type(self):
+        if self.status() == 0xff:
+            return {
+                0x00: 'sequence_number',
+                0x01: 'text',
+                0x02: 'copyright',
+                0x03: 'track_name',
+                0x04: 'instrument_name',
+                0x05: 'lyric',
+                0x06: 'marker',
+                0x07: 'cue',
+                0x20: 'channel_prefix',
+                0x2f: 'end_of_track',
+                0x51: 'tempo',
+                0x54: 'smpte_offset',
+                0x58: 'time_signature',
+                0x59: 'key_signature',
+                0x7f: 'sequencer_specific',
+            }.get(self.meta_type(), 'unknown')
+        return {
+            0x80: 'note_off',
+            0x90: 'note_on',
+            0xa0: 'polyphonic_key_pressure',
+            0xb0: 'control_change',
+            0xc0: 'program_change',
+            0xd0: 'channel_pressure',
+            0xe0: 'pitch_wheel_change',
+            0xf0: 'system',
+        }[self.type_nibble()]
 
-	def __eq__(self, other):
-		a = {k: v for k, v in self.__dict__.items() if k.startswith('_')}
-		b = {k: v for k, v in other.__dict__.items() if k.startswith('_')}
-		return a == b
+    def __repr__(self):
+        return '<{}; {}>'.format(
+            self.delta(),
+            ' '.join([f'{i:02x}' for i in self.msg()]),
+        )
 
-	def __lt__(self, other):
-		if self._ticks==other._ticks:
-			if self._type=='note_off' and other._type=='note_on': return True
-			if self._type=='note_on' and other._type=='note_off': return False
-		return self._ticks<other._ticks
+    def _list_from_chunk(chunk):
+        result = []
+        index = _track_header_size
+        running_status = None
+        while index < len(chunk):
+            deltamsg, index, running_status = Deltamsg._from_chunk(
+                chunk, index, running_status
+            )
+            result.append(deltamsg)
+        if result[-1].msg() != [0xff, 0x2f, 0x00]:
+            raise Exception('invalid last msg')
+        return result
 
-	def __repr__(self):
-		attrs=[i for i in dir(self) if i in [
-			'_ticks_per_quarter',
-			'_us_per_quarter',
-			'_top',
-			'_bottom',
-			'_sharps',
-			'_minor',
-			'_duration',
-			'_channel',
-			'_number',
-			'_value',
-		]]
-		attrs=['{}: {}'.format(i[1:], getattr(self, i)) for i in attrs]
-		return '{}({}; {})'.format(self._type, self._ticks, ', '.join(attrs))
+    def _from_chunk(chunk, index, running_status):
+        # delta
+        delta = 0
+        for i in range(index, index+4):
+            delta <<= 7
+            delta += chunk[i] & 0x7f
+            if not chunk[i] & 0x80: break
+        else: raise Exception('delta too big')
+        index = i+1
+        # msg - status
+        if chunk[index] & 0x80:
+            status = chunk[index]
+            if chunk[index] & 0xf0 != 0xf0:
+                running_status = status
+            index += 1
+        else:
+            if not running_status: raise Exception('no status')
+            status = running_status
+        # msg - data
+        if status & 0xf0 in [0x80, 0x90, 0xa0, 0xb0, 0xe0]:
+            data = chunk[index:index+2]
+            index += 2
+        elif status & 0xf0 in [0xc0, 0xd0]:
+            data = chunk[index:index+1]
+            index += 1
+        elif status & 0xf0 == 0xf0:
+            if status == 0xff:
+                data_size = 2 + chunk[index+1]
+                data = chunk[index:index+data_size]
+                index += data_size
+            else:
+                data = []
+        # result
+        deltamsg = Deltamsg()
+        deltamsg._delta = delta
+        deltamsg._msg = bytes([status]) + data
+        return deltamsg, index, running_status
 
-#Parse MIDI bytes and return a song
-def parse(bytes):
-	chunks=chunkitize(bytes)
-	ticks_per_quarter=big_endian_to_unsigned(chunks[0][12:14])
-	if ticks_per_quarter==0: raise Exception('invalid ticks per quarter')
-	if big_endian_to_unsigned(chunks[0][8:10])!=1: raise Exception('unhandled file type')
-	track=[Event.make('ticks_per_quarter', 0, ticks_per_quarter)]
-	if len(chunks)<2: return [track]
-	song=[]
-	pairs=get_pairs(chunks[1])
-	ticks=0
-	for pair in pairs:
-		ticks+=pair.delta()
-		if pair.event()[0]&0xf0==0xf0:
-			if pair.event()[0]==0xff:
-				if pair.event()[1]==0x51:
-					track+=[Event.make('tempo', ticks, big_endian_to_unsigned(pair.event()[3:6]))]
-				elif pair.event()[1]==0x58:
-					track+=[Event.make('time_sig', ticks, pair.event()[3], 1<<pair.event()[4])]
-				elif pair.event()[1]==0x59:
-					sharps=pair.event()[3]
-					if sharps&0x80: sharps=(sharps&0x7f)-0x80
-					track+=[Event.make('key_sig', ticks, sharps, pair.event()[4])]
-	song+=[track]
-	for i in range(2, len(chunks)):
-		ticks=0
-		pairs=get_pairs(chunks[i])
-		track=[]
-		for i in range(len(pairs)):
-			pair=pairs[i]
-			ticks+=pair.delta()
-			e=pair.event()
-			if e[0]&0xf0==0x90 and e[2]!=0:#Note on
-				duration=0
-				velocity_off=0x40
-				for j in pairs[i+1:]:
-					duration+=j.delta()
-					if j.event()[0]&0xf0==0x90 and j.event()[2]==0 or j.event()[0]&0xf0==0x80:#Note off
-						if e[1]==j.event()[1]:
-							velocity_off=j.event()[2]
-							if j.event()[0]&0xf0==0x90: velocity_off=0x40
-							break
-				track+=[Event.make('note', ticks, duration, e[0]&0x0f, e[1], e[2], velocity_off)]
-			elif e[0]&0xf0==0xb0:
-				track+=[Event.make('control', ticks, e[0]&0x0f, e[1], e[2])]
-			elif e[0]&0xf0==0xe0:
-				track+=[Event.make('pitch_wheel', ticks, e[0]&0x0f, e[1]+(e[2]<<7))]
-		song+=[track]
-	return song
+class Song:
+    def __init__(self, ticks_per_quarter=360):
+        self._ticks_per_quarter = ticks_per_quarter
+        self._tracks = []
 
-#Read a MIDI file and return a nicely constructed list that represents the song in the MIDI.
-#The list is structured as follows:
-#It is a list of tracks.
-#The first track specifies things that correspond to all tracks.
-#The other tracks specify things specific to themselves.
-#Each track is a list of events.
-def read(file_name):
-	def to_int(x):
-		if type(x)==str: return ord(x)
-		return int(x)
-	with open(file_name, 'rb') as file: bytes=[to_int(i) for i in file.read()]
-	return parse(bytes)
+    def save(self, file_path):
+        with open(file_path, 'wb') as file:
+            header = (
+                b'MThd'
+                + bytes([0, 0, 0, 6, 0, 1])
+                + _to_big_endian(len(self.tracks()), 2)
+                + _to_big_endian(self.ticks_per_quarter(), 2)
+            )
+            file.write(header)
+            for track in self.tracks():
+                track_bytes = []
+                for deltamsg in track:
+                    track_bytes.extend(deltamsg.delta_bytes())
+                    track_bytes.extend(deltamsg.msg())
+                _write_track(file, track_bytes)
 
-def to_big_endian(x, size):
-	return [(x>>((size-1-i)*8))&0xff for i in range(size)]
+    def load(self, file_path):
+        with open(file_path, 'rb') as file: chunks = _chunkitize(file.read())
+        self._ticks_per_quarter = _big_endian_to_unsigned(chunks[0][12:14])
+        if _big_endian_to_unsigned(chunks[0][8:10]) != 1:
+            raise Exception('unhandled file type')
+        if _big_endian_to_unsigned(chunks[0][10:12]) != len(chunks) - 1:
+            raise Exception('wrong number of tracks')
+        self._tracks = [
+            Deltamsg._list_from_chunk(chunk)
+            for chunk in chunks[1:]
+        ]
+        return self
 
-#Write a MIDI track to a file based on a list of bytes.
-#The track header and end message are appended automatically, so they should not be included in bytes.
-def write_track(file, bytes):
-	#Some idiot midi players ignore the first delta, so start with an empty text event
-	empty_text_event=[0, 0xff, 0x01, 0]
-	if bytes[:4]!=empty_text_event: bytes=empty_text_event+bytes
-	#
-	bytes+=[1, 0xff, 0x2f, 0]
-	track_header=[ord(i) for i in 'MTrk']+to_big_endian(len(bytes), 4)
-	bytes=track_header+bytes
-	file.write(bytearray(bytes))
+    def tracks(self):
+        return self._tracks
 
-def ilog2(x):
-	result=-1
-	while x!=0:
-		x>>=1
-		result+=1
-	if result==-1: raise Exception('input outside domain')
-	return result
-
-#Write a MIDI file based on a nicely constructed list.
-def write(file_name, song):
-	file=open(file_name, 'wb')
-	header=[ord(i) for i in 'MThd']+[0, 0, 0, 6, 0, 1]+to_big_endian(len(song), 2)+to_big_endian(ticks_per_quarter(song), 2)
-	file.write(bytearray(header))
-	bytes=[]
-	last_ticks=0
-	for event in song[0][1:]:
-		bytes+=write_delta(event.ticks()-last_ticks)
-		if event.type()=='tempo':
-			bytes+=[0xff, 0x51, 0x03]
-			bytes+=to_big_endian(event.us_per_quarter(), 3)
-		elif event.type()=='time_sig':
-			bytes+=[0xff, 0x58, 0x04]
-			bytes+=[event.top(), ilog2(event.bottom()), 24, 8]
-		elif event.type()=='key_sig':
-			bytes+=[0xff, 0x59, 0x02]
-			sharps=event.sharps()
-			if sharps<0: sharps=0x100+sharps
-			bytes+=[sharps, event.minor()]
-		else: raise Exception('unhandled event type: {}'.format(event.type()))
-		last_ticks=event.ticks()
-	write_track(file, bytes)
-	for track in song[1:]:
-		events=[]
-		for event in track:
-			if event.type()=='note': events+=event.split_note()
-			else: events.append(event)
-		events.sort()
-		last_ticks=0
-		for i in range(len(events)):
-			temp=events[i].ticks()
-			events[i].ticks(sub=last_ticks)
-			last_ticks=temp
-		bytes=[]
-		for event in events:
-			if event.type()=='note_on':
-				bytes+=write_delta(event.ticks())
-				bytes+=[0x90|event.channel()]
-				bytes+=[event.number()]
-				bytes+=[event.velocity()]
-			elif event.type()=='note_off':
-				bytes+=write_delta(event.ticks())
-				bytes+=[0x80|event.channel()]
-				bytes+=[event.number()]
-				bytes+=[event.velocity()]
-			elif event.type()=='control':
-				bytes+=write_delta(event.ticks())
-				bytes+=[0xb0|event.channel()]
-				bytes+=[event.number()]
-				bytes+=[event.value()]
-			elif event.type()=='pitch_wheel':
-				bytes+=write_delta(event.ticks())
-				bytes+=[0xe0|event.channel()]
-				bytes+=[event.value()&0x7f]
-				bytes+=[event.value()>>7]
-		write_track(file, bytes)
-	file.close()
-	return
-
-#=====helpers=====#
-import bisect
-
-class Index:
-	def __init__(self, midi, track, index):
-		self.midi=midi
-		self.track=track
-		self.index=index
-
-	def __eq__(self, other):
-		if not isinstance(other, Index): return False
-		return self.midi is other.midi and self.track==other.track and self.index==other.index
-
-	def __hash__(self):
-		return id(self.midi)*1000000+self.track+100*self.index
-
-	def __repr__(self):
-		return 'Index({}, {}, {})'.format(id(self.midi), self.track, self.index)
-
-def empty_midi(staves=1, ticks_per_quarter=360):
-	return [[Event.make('ticks_per_quarter', 0, ticks_per_quarter)]]+[[] for i in range(staves)]
-
-def ticks_per_quarter(midi):
-	assert midi[0][0].type()=='ticks_per_quarter'
-	return midi[0][0].ticks_per_quarter()
-
-def add_event(track, event):
-	assert isinstance(event, Event)
-	bisect.insort(track, event)
-
-def add_note(midi, track, ticks, duration, number, channel=None, velocity_on=0x40, velocity_off=0x40):
-	if channel==None: channel=track-1
-	add_event(midi[track], Event.make('note', ticks, duration, channel, number, velocity_on, velocity_off))
-
-def previous_note(midi, track, ticks):
-	event=Event()
-	event._ticks=ticks
-	index=bisect.bisect_left(midi[track], event)-1
-	if index==-1: return
-	note=midi[track][index]
-	if note.ticks()>=ticks: return
-	return Index(midi, track, index)
-
-def remove_note(note):
-	result=note.midi[note.track][note.index]
-	del note.midi[note.track][note.index]
-	return result
-
-def transpose_note(note, amount):
-	note.midi[note.track][note.index].number(add=amount)
-
-def notes_in(midi, track, ticks, duration, number=None, generous=False, track_end=None):
-	if track_end==None: track_end=track
-	result=[]
-	for t in range(track, track_end+1):
-		for i, v in enumerate(midi[t]):
-			if v.ticks()>=ticks+duration: break#note starts after window ends
-			if v.type()!='note': continue
-			if number and v.number()!=number: continue
-			if generous:
-				if v.ticks()+v.duration()<=ticks: continue#note ends before window starts
-			else:
-				if v.ticks()<ticks: continue#note starts before window starts
-				if v.ticks()+v.duration()>ticks+duration: continue#note ends after window ends
-			result.append(Index(midi, t, i))
-	return result
-
-def delete(midi, notes):
-	notes=sorted(notes, key=lambda x: -x.index)
-	for note in notes: del midi[note.track][note.index]
-
-def transpose(midi, notes, amount):
-	for note in notes: midi[note.track][note.index].number(add=amount)
-
-def translate(midi, notes, ticks):
-	for note in notes: midi[note.track][note.index].ticks(add=ticks)
-
-def durate(midi, notes, ticks):
-	for note in notes: midi[note.track][note.index].duration(ticks)
-
-def set_velocity_on(midi, notes, velocity):
-	for note in notes: midi[note.track][note.index].velocity_on(velocity)
-
-def deserialize_bytes(serialized):
-	return [int(i[:2], 16) for i in serialized.split()]
-
-def quantize(midi, divisor=4):
-	quantum=ticks_per_quarter(midi)//divisor
-	def quantize_etter(etter, minimum=0):
-		etter(quantum*max(round(etter()/quantum), minimum))
-	for track in midi:
-		for event in track:
-			quantize_etter(event.ticks)
-			if event.type()=='note':
-				quantize_etter(event.duration, 1)
-
-def combine(midi_a, midi_b):
-	assert midi_a[0] == midi_b[0]
-	combined = copy.deepcopy(midi_a)
-	combined.extend(midi_b[1:])
-	return combined
+    def ticks_per_quarter(self):
+        return self._ticks_per_quarter
