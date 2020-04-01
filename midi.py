@@ -1,3 +1,5 @@
+import math
+
 _track_header_size = 8
 
 def _big_endian_to_unsigned(big_endian_bytes):
@@ -45,6 +47,18 @@ def _write_track(file, track_bytes):
     file.write(track_header + bytes(track_bytes))
 
 class Deltamsg:
+    def __init__(self, *args):
+        if len(args) == 2:
+            if type(args[0]) == int and type(args[1]) == bytes:
+                self._delta = args[0]
+                self._msg = args[1]
+                return
+            if isinstance(args[0], Deltamsg) and type(args[1]) == int:
+                self._delta = args[1]
+                self._msg = args[0].msg()
+                return
+        raise Exception(f'invalid args: {args}')
+
     def delta(self):
         return self._delta
 
@@ -73,6 +87,16 @@ class Deltamsg:
         if self.type_nibble() == 0xf0:
             raise Exception("system messages don't have a channel")
         return self.status() & 0x0f
+
+    def note(self):
+        if self.type_nibble() not in [0x80, 0x90, 0xa0]:
+            raise Exception('no note')
+        return self._msg[1]
+
+    def velocity(self):
+        if self.type_nibble() not in [0x80, 0x90]:
+            raise Exception('no velocity')
+        return self._msg[2]
 
     def meta_type(self):
         if self.status() != 0xff:
@@ -110,10 +134,24 @@ class Deltamsg:
         }[self.type_nibble()]
 
     def __repr__(self):
-        return '<{}; {}>'.format(
-            self.delta(),
-            ' '.join([f'{i:02x}' for i in self.msg()]),
-        )
+        if self.type_nibble() in [0x80, 0x90]:
+            notes = [
+                'C_', 'C#', 'D_', 'Eb', 'E_',
+                'F_', 'F#', 'G_', 'Ab', 'A_', 'Bb', 'B '
+            ]
+            note = notes[self.note()%12]
+            octave = str(self.note() // 12)
+            return '<{}; {} {} {}>'.format(
+                self.delta(),
+                f'{self.status():02x}',
+                note + octave,
+                f'{self.velocity():02x}',
+            )
+        else:
+            return '<{}; {}>'.format(
+                self.delta(),
+                ' '.join([f'{i:02x}' for i in self.msg()]),
+            )
 
     def _list_from_chunk(chunk):
         result = []
@@ -161,9 +199,7 @@ class Deltamsg:
             else:
                 data = []
         # result
-        deltamsg = Deltamsg()
-        deltamsg._delta = delta
-        deltamsg._msg = bytes([status]) + data
+        deltamsg = Deltamsg(delta, bytes([status]) + data)
         return deltamsg, index, running_status
 
 class Song:
@@ -205,3 +241,78 @@ class Song:
 
     def ticks_per_quarter(self):
         return self._ticks_per_quarter
+
+    def extract(self, track, types):
+        result = []
+        delta = 0
+        for deltamsg in self.tracks()[track]:
+            delta += deltamsg.delta()
+            if deltamsg.type() in types:
+                result.append(Deltamsg(deltamsg, delta))
+                delta = 0
+        return result
+
+    def collect(self, types):
+        result = []
+        for i in range(len(self.tracks())):
+            result = interleave(result, self.extract(i, types))
+        return result
+
+class TrackIter:
+    def __init__(self, track):
+        self.track = track
+        self.i = 0
+        self.ticks_last = 0
+        self.ticks_curr = 0
+
+    def more(self):
+        return self.i < len(self.track)
+
+    def delta(self):
+        if self.i >= len(self.track): return math.inf
+        result = (
+            self.track[self.i].delta()
+            - (self.ticks_curr - self.ticks_last)
+        )
+        if result < 0:
+            raise Exception('invalid iteration')
+        return result
+
+    def advance(self, delta, interleave=False):
+        self.ticks_curr += delta
+        if not self.delta():
+            deltamsg = self.track[self.i]
+            self.i += 1
+            self.ticks_last += deltamsg.delta()
+            if interleave: return Deltamsg(deltamsg, delta)
+            return deltamsg
+
+def interleave(*tracks):
+    result = []
+    iters = [TrackIter(i) for i in tracks]
+    while any(i.more() for i in iters):
+        delta = min(i.delta() for i in iters)
+        first = True
+        for i in [i.advance(delta, True) for i in iters]:
+            if i:
+                if first:
+                    first = False
+                    result.append(i)
+                else:
+                    result.append(Deltamsg(i, 0))
+    return result
+
+def print_vertical(*tracks):
+    iters = [TrackIter(i) for i in tracks]
+    ticks = 0
+    while any(i.more() for i in iters):
+        delta = min(i.delta() for i in iters)
+        ticks += delta
+        print(f'{ticks:>10}', end='')
+        for i in [i.advance(delta) for i in iters]:
+            if i:
+                s = repr(i)
+            else:
+                s = '-'
+            print(f'{s:>30}', end='')
+        print()
