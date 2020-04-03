@@ -316,3 +316,12 @@ def print_vertical(*tracks):
                 s = '-'
             print(f'{s:>30}', end='')
         print()
+
+class msg:
+    def pitch_bend_range(semitones=2, cents=0):
+        return [
+            [0xb0, 0x65, 0],
+            [0xb0, 0x64, 0],
+            [0xb0, 0x06, semitones],
+            [0xb0, 0x26, cents],
+        ]
