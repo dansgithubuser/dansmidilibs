@@ -202,10 +202,29 @@ class Deltamsg:
         deltamsg = Deltamsg(delta, bytes([status]) + data)
         return deltamsg, index, running_status
 
+class Track(list):
+    def extract(self, types):
+        result = Track()
+        delta = 0
+        for deltamsg in self:
+            delta += deltamsg.delta()
+            if deltamsg.type() in types:
+                result.append(Deltamsg(deltamsg, delta))
+                delta = 0
+        return result
+
+    def msg_set(self):
+        result = set()
+        for deltamsg in self:
+            result.add(tuple(deltamsg.msg()))
+        return result
+
 class Song:
-    def __init__(self, ticks_per_quarter=360):
+    def __init__(self, file_path=None, ticks_per_quarter=360):
         self._ticks_per_quarter = ticks_per_quarter
         self._tracks = []
+        if file_path != None:
+            self.load(file_path)
 
     def save(self, file_path):
         with open(file_path, 'wb') as file:
@@ -231,31 +250,24 @@ class Song:
         if _big_endian_to_unsigned(chunks[0][10:12]) != len(chunks) - 1:
             raise Exception('wrong number of tracks')
         self._tracks = [
-            Deltamsg._list_from_chunk(chunk)
+            Track(Deltamsg._list_from_chunk(chunk))
             for chunk in chunks[1:]
         ]
         return self
 
-    def tracks(self):
-        return self._tracks
+    def tracks(self, track=None):
+        if track == None:
+            return self._tracks
+        else:
+            return self._tracks[track]
 
     def ticks_per_quarter(self):
         return self._ticks_per_quarter
 
-    def extract(self, track, types):
-        result = []
-        delta = 0
-        for deltamsg in self.tracks()[track]:
-            delta += deltamsg.delta()
-            if deltamsg.type() in types:
-                result.append(Deltamsg(deltamsg, delta))
-                delta = 0
-        return result
-
     def collect(self, types):
         result = []
         for i in range(len(self.tracks())):
-            result = interleave(result, self.extract(i, types))
+            result = interleave(result, self.tracks(i).extract(types))
         return result
 
 class TrackIter:
@@ -288,7 +300,7 @@ class TrackIter:
             return deltamsg
 
 def interleave(*tracks):
-    result = []
+    result = Track()
     iters = [TrackIter(i) for i in tracks]
     while any(i.more() for i in iters):
         delta = min(i.delta() for i in iters)
