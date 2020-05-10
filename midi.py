@@ -46,39 +46,36 @@ def _write_track(file, track_bytes):
     track_header = b'MTrk' + _to_big_endian(len(track_bytes), 4)
     file.write(track_header + bytes(track_bytes))
 
-class Deltamsg:
-    def __init__(self, *args):
-        if len(args) == 2:
-            if type(args[0]) == int and type(args[1]) == bytes:
-                self._delta = args[0]
-                self._msg = args[1]
-                return
-            if isinstance(args[0], Deltamsg) and type(args[1]) == int:
-                self._delta = args[1]
-                self._msg = args[0].msg()
-                return
-        raise Exception(f'invalid args: {args}')
+class Msg(list):
+    def pitch_bend_range(semitones=2, cents=0):
+        return [Msg(i) for i in [
+            [0xb0, 0x65, 0],
+            [0xb0, 0x64, 0],
+            [0xb0, 0x06, semitones],
+            [0xb0, 0x26, cents],
+        ]]
 
-    def delta(self):
-        return self._delta
+    def __repr__(self):
+        if self.type_nibble() in [0x80, 0x90]:
+            notes = [
+                'C_', 'C#', 'D_', 'Eb', 'E_',
+                'F_', 'F#', 'G_', 'Ab', 'A_', 'Bb', 'B '
+            ]
+            note = notes[self.note() % 12]
+            octave = str(self.note() // 12 - 1)
+            return '{:02x} {} {:02x}'.format(
+                self.status(),
+                note + octave,
+                self.velocity(),
+            )
+        else:
+            return ' '.join([f'{i:02x}' for i in self])
 
-    def delta_bytes(self):
-        result = []
-        delta = self.delta()
-        for i in range(4):
-            byte = delta & 0x7f
-            delta >>= 7
-            result = [byte] + result
-            if delta == 0:
-                for i in range(len(result) - 1): result[i] |= 0x80
-                return result
-        raise Exception('delta too big')
-
-    def msg(self):
-        return list(self._msg)
+    def __str__(self):
+        return str(list(self))
 
     def status(self):
-        return self._msg[0]
+        return self[0]
 
     def type_nibble(self):
         return self.status() & 0xf0
@@ -91,17 +88,17 @@ class Deltamsg:
     def note(self):
         if self.type_nibble() not in [0x80, 0x90, 0xa0]:
             raise Exception('no note')
-        return self._msg[1]
+        return self[1]
 
     def velocity(self):
         if self.type_nibble() not in [0x80, 0x90]:
             raise Exception('no velocity')
-        return self._msg[2]
+        return self[2]
 
     def meta_type(self):
         if self.status() != 0xff:
             raise Exception('not meta')
-        return self._msg[1]
+        return self[1]
 
     def type(self):
         if self.status() == 0xff:
@@ -133,25 +130,45 @@ class Deltamsg:
             0xf0: 'system',
         }[self.type_nibble()]
 
+class Deltamsg:
+    def __init__(self, *args):
+        if len(args) == 2:
+            if type(args[0]) == int and type(args[1]) == bytes:
+                self._delta = args[0]
+                self._msg = Msg(args[1])
+                return
+            if isinstance(args[0], Deltamsg) and type(args[1]) == int:
+                self._delta = args[1]
+                self._msg = args[0].msg()
+                return
+        raise Exception(f'invalid args: {args}')
+
     def __repr__(self):
-        if self.type_nibble() in [0x80, 0x90]:
-            notes = [
-                'C_', 'C#', 'D_', 'Eb', 'E_',
-                'F_', 'F#', 'G_', 'Ab', 'A_', 'Bb', 'B '
-            ]
-            note = notes[self.note()%12]
-            octave = str(self.note() // 12)
-            return '<{}; {} {} {}>'.format(
-                self.delta(),
-                f'{self.status():02x}',
-                note + octave,
-                f'{self.velocity():02x}',
-            )
-        else:
-            return '<{}; {}>'.format(
-                self.delta(),
-                ' '.join([f'{i:02x}' for i in self.msg()]),
-            )
+        return '{}; {}'.format(
+            self.delta(),
+            self.msg(),
+        )
+
+    def delta(self):
+        return self._delta
+
+    def delta_bytes(self):
+        result = []
+        delta = self.delta()
+        for i in range(4):
+            byte = delta & 0x7f
+            delta >>= 7
+            result = [byte] + result
+            if delta == 0:
+                for i in range(len(result) - 1): result[i] |= 0x80
+                return result
+        raise Exception('delta too big')
+
+    def msg(self):
+        return self._msg
+
+    def msg_bytes(self):
+        return bytes(self._msg)
 
     def _list_from_chunk(chunk):
         result = []
@@ -208,7 +225,7 @@ class Track(list):
         delta = 0
         for deltamsg in self:
             delta += deltamsg.delta()
-            if deltamsg.type() in types:
+            if deltamsg.msg().type() in types:
                 result.append(Deltamsg(deltamsg, delta))
                 delta = 0
         return result
@@ -239,7 +256,7 @@ class Song:
                 track_bytes = []
                 for deltamsg in track:
                     track_bytes.extend(deltamsg.delta_bytes())
-                    track_bytes.extend(deltamsg.msg())
+                    track_bytes.extend(deltamsg.msg_bytes())
                 _write_track(file, track_bytes)
 
     def load(self, file_path):
@@ -328,12 +345,3 @@ def print_vertical(*tracks):
                 s = '-'
             print(f'{s:>30}', end='')
         print()
-
-class msg:
-    def pitch_bend_range(semitones=2, cents=0):
-        return [
-            [0xb0, 0x65, 0],
-            [0xb0, 0x64, 0],
-            [0xb0, 0x06, semitones],
-            [0xb0, 0x26, cents],
-        ]
