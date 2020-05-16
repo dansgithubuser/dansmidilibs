@@ -4,14 +4,86 @@ function noteEndures(note, ticks) {
   return note.ticks <= ticks && ticks < note.ticks + note.duration;
 }
 
+function _bigEndianToUnsigned(bytes) {
+  let result = 0;
+  for (let i of bytes) {
+    result <<= 8;
+    result += i;
+  }
+  return result;
+}
+
 class Track {
-  constructor () {
+  constructor(pairs) {
     this.events = [];
     this.octave = 0;
+    if (!pairs) return;
+    let ticks = 0;
+    for (let i = 0; i < pairs.length; ++i) {
+      const pair = pairs[i];
+      ticks += pair.delta;
+      if (pair.event[0] >> 4 == 0x9 && pair.event[2]) {// Note on
+        let duration = 0;
+        let velocityOff = 0x40;
+        for (let j = i + 1; j < pairs.length; ++j) {
+          duration += pairs[j].delta;
+          if (pairs[j].event[0] >> 4 == 0x9 && pairs[j].event[2] == 0 || pairs[j].event[0] >> 4 == 0x8)// Note off
+            if (pair.event[1] == pairs[j].event[1]) {
+              velocityOff = pairs[j].event[2];
+              if (pairs[j].event[0] >> 4 == 0x9) velocityOff = 0x40;
+              break;
+            }
+        }
+        this.events.push({
+          type: 'note',
+          ticks,
+          duration,
+          channel: pair.event[0] & 0xf,
+          number: pair.event[1],
+          velocityOn: pair.event[2],
+          velocityOff,
+        });
+      } else if (pair.event[0] >> 4 == 0xb) this.events.push({
+        type: 'control',
+        ticks,
+        channel: pair.event[0] & 0xf,
+        number: pair.event[1],
+        value: pair.event[2],
+      });
+      else if (pair.event[0] >> 4 == 0xe) this.events.push({
+        type: 'pitch_wheel',
+        ticks,
+        channel: pair.event[0] & 0xf,
+        value: pair.event[1] + (pair.event[2] << 7),
+      });
+      else if (pair.event[0] == 0xff) {
+        if (pair.event[1] == 0x51) this.events.push({
+          type: 'tempo',
+          ticks,
+          usPerQuarter: _bigEndianToUnsigned(pair.event.slice(3, 6)),
+        });
+        else if (pair.event[1] == 0x58) this.events.push({
+          type: 'time_sig',
+          ticks,
+          top: pair.event[3],
+          bottom: 1 << pair.event[4],
+        });
+        else if (pair.event[1] == 0x59) {
+          let sharps = pair.event[3];
+          if (sharps & 0x80) sharps = (sharps & 0x7f) - 0x80;
+          this.events.push({
+            type: 'key_sig',
+            ticks,
+            sharps,
+            minor: pair.event[4],
+          });
+        }
+      }
+    }
   }
 
   calculateOctave(ticksI, ticksF) {
-    var lowest = 128;
+    let lowest = 128;
     for (const event of this.events) {
       if (event.type != 'note') continue;
       if (event.ticks + event.duration < ticksI) continue;
@@ -23,7 +95,7 @@ class Track {
     else
       this.octave = Math.floor(lowest / 12);
   }
-};
+}
 
 export class Midi {
   constructor(canvas) {
@@ -90,93 +162,42 @@ export class Midi {
     this._selected = [];
   }
 
-  //----- from bytes -----//
-  fromBytes(bytes) {
-    const chunks = this._chunkitize(bytes);
-    this.ticksPerQuarter = this._bigEndianToUnsigned(chunks[0].slice(12, 14));
+  fromDeltamsgs(deltamsgs) {
+    this.ticksPerQuarter = null;
     this._tracks = [];
-    for (const chunk of chunks.slice(1)) {
-      var ticks = 0;
-      const pairs = this._getPairs(chunk);
-      const track = new Track;
-      for (var i = 0; i < pairs.length; ++i) {
-        const pair = pairs[i];
-        ticks += pair.delta;
-        if (pair.event[0] >> 4 == 0x9 && pair.event[2]) {// Note on
-          var duration = 0;
-          var velocityOff = 0x40;
-          for (var j = i + 1; j < pairs.length; ++j) {
-            duration += pairs[j].delta;
-            if (pairs[j].event[0] >> 4 == 0x9 && pairs[j].event[2] == 0 || pairs[j].event[0] >> 4 == 0x8)// Note off
-              if (pair.event[1] == pairs[j].event[1]) {
-                velocityOff = pairs[j].event[2];
-                if (pairs[j].event[0] >> 4 == 0x9) velocityOff = 0x40;
-                break;
-              }
-          }
-          track.events.push({
-            type: 'note',
-            ticks,
-            duration,
-            channel: pair.event[0] & 0xf,
-            number: pair.event[1],
-            velocityOn: pair.event[2],
-            velocityOff,
-          });
-        } else if (pair.event[0] >> 4 == 0xb) track.events.push({
-          type: 'control',
-          ticks,
-          channel: pair.event[0] & 0xf,
-          number: pair.event[1],
-          value: pair.event[2],
-        });
-        else if (pair.event[0] >> 4 == 0xe) track.events.push({
-          type: 'pitch_wheel',
-          ticks,
-          channel: pair.event[0] & 0xf,
-          value: pair.event[1] + (pair.event[2] << 7),
-        });
-        else if (pair.event[0] == 0xff) {
-          if (pair.event[1] == 0x51) track.events.push({
-            type: 'tempo',
-            ticks,
-            usPerQuarter: this._bigEndianToUnsigned(pair.event.slice(3, 6)),
-          });
-          else if (pair.event[1] == 0x58) track.events.push({
-            type: 'time_sig',
-            ticks,
-            top: pair.event[3],
-            bottom: 1 << pair.event[4],
-          });
-          else if (pair.event[1] == 0x59) {
-            var sharps = pair.event[3];
-            if (sharps & 0x80) sharps = (sharps & 0x7f) - 0x80;
-            track.events.push({
-              type: 'key_sig',
-              ticks,
-              sharps,
-              minor: pair.event[4],
-            });
-          }
-        }
-      }// pairs
-      this._tracks.push(track);
-    }// chunks
+    for (let line of deltamsgs) {
+      if (!line.deltamsgs.length) {
+        this._tracks.push(new Track);
+        continue;
+      }
+      if (this.ticksPerQuarter == null) {
+        this.ticksPerQuarter = line.ticks_per_quarter;
+      } else if (this.ticksPerQuarter != line.ticks_per_quarter) {
+        console.error("ticks per quarter doesn't match")
+        this._tracks.push(new Track);
+        continue;
+      }
+      for (let deltamsg of line.deltamsgs) {
+        deltamsg.event = deltamsg.msg;
+      }
+      this._tracks.push(new Track(line.deltamsgs));
+    }
     this._render();
   }
 
-  _bigEndianToUnsigned(bytes) {
-    var result = 0;
-    for (var i of bytes) {
-      result <<= 8;
-      result += i;
-    }
-    return result;
+  //----- from bytes -----//
+  fromBytes(bytes) {
+    const chunks = this._chunkitize(bytes);
+    this.ticksPerQuarter = _bigEndianToUnsigned(chunks[0].slice(12, 14));
+    this._tracks = [];
+    for (const chunk of chunks.slice(1))
+      this._tracks.push(new Track(this._getPairs(chunk)));
+    this._render();
   }
 
   _chunkitize(bytes) {
     const chunks = [bytes.slice(0, 14)];
-    var i = chunks[0].length;
+    let i = chunks[0].length;
     while (i < bytes.length) {
       const trackSize = this._bigEndianToUnsigned(bytes.slice(i + 4, i + 8));
       const j = i + this._trackHeaderSize + trackSize;
@@ -188,10 +209,10 @@ export class Midi {
 
   _getPairs(trackChunk) {
     const pairs = [];
-    var i = this._trackHeaderSize;
-    var runningStatus = null;
+    let i = this._trackHeaderSize;
+    let runningStatus = null;
     while (i < trackChunk.length) {
-      var delta, status, parameters = [];
+      let delta, status, parameters = [];
       [delta, i] = this._readDelta(trackChunk, i);
       if (trackChunk[i] & 0x80) {
         status = trackChunk[i];
@@ -219,8 +240,8 @@ export class Midi {
   }
 
   _readDelta(bytes, i) {
-    var delta = 0;
-    for (var j = 0; j < 4; ++j) {
+    let delta = 0;
+    for (let j = 0; j < 4; ++j) {
       delta <<= 7;
       delta += bytes[i] & 0x7f;
       if (!(bytes[i] & 0x80)) break;
@@ -234,8 +255,8 @@ export class Midi {
     const bytes = [77, 84, 104, 100, 0, 0, 0, 6, 0, 1];
     bytes.push(...this._unsignedToBigEndian(this._tracks.length, 2));
     bytes.push(...this._unsignedToBigEndian(this.ticksPerQuarter, 2));
-    var trackBytes = [];
-    var ticks = 0;
+    let trackBytes = [];
+    let ticks = 0;
     for (event of this._tracks[0].events) {
       trackBytes.push(...this._writeDelta(event.ticks - ticks));
       if (event.type == 'tempo') {
@@ -246,7 +267,7 @@ export class Midi {
         trackBytes.push(...[event.top, this._ilog2(event.bottom), 24, 8]);
       } else if (event.type == 'key_sig') {
         trackBytes.push(...[0xff, 0x59, 0x02]);
-        var sharps = event.sharps;
+        let sharps = event.sharps;
         if (sharps < 0) sharps = 0x100 + sharps;
         trackBytes.push(...[sharps, event.minor ? 1 : 0]);
       } else throw new Error('unhandled event type: ' + event.type);
@@ -315,7 +336,7 @@ export class Midi {
 
   _unsignedToBigEndian(u, size) {
     const result = [];
-    for (var i = 0; i < size; ++i) {
+    for (let i = 0; i < size; ++i) {
       result.push((u >> ((size - 1 - i) * 8)) & 0xff);
     }
     return result;
@@ -323,18 +344,18 @@ export class Midi {
 
   _writeDelta(ticks) {
     const result = [];
-    for (var i = 0; i < 4; ++i) {
+    for (let i = 0; i < 4; ++i) {
       result.unshift(ticks & 0x7f);
       ticks >>= 7;
       if (ticks == 0) {
-        for (var j = 0; j < result.length - 1; ++j) result[j] |= 0x80;
+        for (let j = 0; j < result.length - 1; ++j) result[j] |= 0x80;
         return result;
       }
     }
   }
 
   _ilog2(x) {
-    var result = -1;
+    let result = -1;
     while (x) {
       x >>= 1;
       ++result;
@@ -366,7 +387,7 @@ export class Midi {
     // background
     this._rect(0, 0, { w: this._canvas.width, h: this._canvas.height, color: 'black' });
     const qi = Math.floor(this._window.ticksI / this.ticksPerQuarter);
-    for (var q = qi; q < qi + this._window.ticksD / this.ticksPerQuarter; ++q) {
+    for (let q = qi; q < qi + this._window.ticksD / this.ticksPerQuarter; ++q) {
       if (q % 2) continue;
       const ticks = q * this.ticksPerQuarter;
       this._rect(
@@ -380,10 +401,10 @@ export class Midi {
       )
     }
     // regular tracks
-    for (var trackIndex = 1; trackIndex < this._tracks.length; ++trackIndex) {
+    for (let trackIndex = 1; trackIndex < this._tracks.length; ++trackIndex) {
       const track = this._tracks[trackIndex];
       // staff
-      for (var i = 0; i < this._window.notesPerStaff; i += 24)
+      for (let i = 0; i < this._window.notesPerStaff; i += 24)
         for (const [number, color] of this._staves)
           this._renderNote(
             this._window.ticksI,
@@ -394,7 +415,7 @@ export class Midi {
             color,
           );
       track.calculateOctave(this._window.ticksI, this._window.ticksI + this._window.ticksD);
-      for (var i = 0; i < Math.abs(track.octave - 5); ++i) {
+      for (let i = 0; i < Math.abs(track.octave - 5); ++i) {
         const s = 3 * this._noteH();
         this._rect((i + 0.5) * s * 1.5, this._noteY(trackIndex, 0, -1), {
           w: s,
@@ -417,12 +438,13 @@ export class Midi {
       this._renderEvents(track.events.filter((i) => i.type != 'note'), trackIndex);
     }
     // first track
-    this._renderEvents(this._tracks[0].events, 0);
+    if (this._tracks.length)
+      this._renderEvents(this._tracks[0].events, 0);
   }
 
   _renderEvents(events, trackIndex) {
     const yi = trackIndex ? this._noteY(trackIndex) : 24;
-    var ticks, y = yi;
+    let ticks, y = yi;
     for (const event of events) {
       if (event.ticks != ticks) {
         y = yi;
@@ -523,7 +545,7 @@ export class Midi {
   transpose(amount) {
     if (typeof amount == 'string') amount = parseInt(amount);
     for (const i of this._selected) {
-      var n = this._tracks[i[0]].events[i[1]].number;
+      let n = this._tracks[i[0]].events[i[1]].number;
       n += amount;
       if (n < 0) n = 0;
       if (n > 127) n = 127;
@@ -535,7 +557,7 @@ export class Midi {
   _addEvent(trackIndex, event) {
     if (trackIndex >= this._tracks.length) return;
     const track = this._tracks[trackIndex];
-    for (var i = 0; i < track.events.length; ++i)
+    for (let i = 0; i < track.events.length; ++i)
       if (track.events[i].ticks > event.ticks) {
         track.events.splice(i, 0, event);
         return;
@@ -568,7 +590,7 @@ export class Midi {
   _getNoteIndex(trackIndex, ticks, number){
     if (trackIndex >= this._tracks.length) return;
     const track = this._tracks[trackIndex];
-    for (var i = 0; i < track.events.length; ++i)
+    for (let i = 0; i < track.events.length; ++i)
       if (track.events[i].type == 'note' && track.events[i].number == number && noteEndures(track.events[i], ticks))
         return i;
   }
