@@ -13,6 +13,23 @@ function _bigEndianToUnsigned(bytes) {
   return result;
 }
 
+function _unsignedToBigEndian(u, size) {
+  const result = [];
+  for (let i = 0; i < size; ++i) {
+    result.push((u >> ((size - 1 - i) * 8)) & 0xff);
+  }
+  return result;
+}
+
+function _ilog2(x) {
+  let result = -1;
+  while (x) {
+    x >>= 1;
+    ++result;
+  }
+  return result;
+}
+
 class Track {
   constructor(pairs) {
     this.events = [];
@@ -82,6 +99,54 @@ class Track {
     }
   }
 
+  toDeltamsgs() {
+    const deltamsgs = [];
+    // split notes
+    const events = [];
+    for (const event of this.events) {
+      if (event.type =='note') events.push(...this._splitNote(event));
+      else events.push(event);
+    }
+    events.sort((l, r) => {
+      if (l.ticks == r.ticks) {
+        if (l.type == 'note_off' && r.type == 'note_on' ) return -1;
+        if (l.type == 'note_on'  && r.type == 'note_off') return  1;
+      }
+      return l.ticks - r.ticks;
+    });
+    // events to deltamsgs
+    let ticks = 0;
+    for (event of events) {
+      let msg;
+      if (event.type == 'tempo') {
+        msg = [0xff, 0x51, 0x03, ..._unsignedToBigEndian(event.usPerQuarter, 3)];
+      } else if (event.type == 'time_sig') {
+        msg = [0xff, 0x58, 0x04, event.top, _ilog2(event.bottom), 24, 8];
+      } else if (event.type == 'key_sig') {
+        let sharps = event.sharps;
+        if (sharps < 0) sharps = 0x100 + sharps;
+        msg = [0xff, 0x59, 0x02, sharps, event.minor ? 1 : 0];
+      } else if (event.type == 'note_on') {
+        msg = [0x90 | event.channel, event.number, event.velocity];
+      } else if (event.type == 'note_off') {
+        msg = [0x80 | event.channel, event.number, event.velocity];
+      } else if (event.type == 'control') {
+        msg = [0xb0 | event.channel, trackBytes.push(event.number), event.value];
+      } else if (event.type == 'pitch_wheel') {
+        msg = [0xe0 | event.channel, event.value & 0x7f, event.value >> 7];
+      } else {
+        throw new Error('unhandled event type: ' + event.type);
+      }
+      deltamsgs.push({
+        delta: event.ticks - ticks,
+        msg,
+      });
+      ticks = event.ticks;
+    }
+    // return
+    return deltamsgs;
+  }
+
   calculateOctave(ticksI, ticksF) {
     let lowest = 128;
     for (const event of this.events) {
@@ -94,6 +159,24 @@ class Track {
       this.octave = 5;
     else
       this.octave = Math.floor(lowest / 12);
+  }
+
+  _splitNote(note) {
+    return [
+      {
+        type: 'note_on',
+        ticks: note.ticks,
+        channel: note.channel,
+        number: note.number,
+        velocity: note.velocityOn,
+      }, {
+        type: 'note_off',
+        ticks: note.ticks + note.duration,
+        channel: note.channel,
+        number: note.number,
+        velocity: note.velocityOff,
+      },
+    ];
   }
 }
 
@@ -185,6 +268,15 @@ export class Midi {
     this._render();
   }
 
+  toDeltamsgs() {
+    return this._tracks.map(track => {
+      return {
+        deltamsgs: track.toDeltamsgs(),
+        ticks_per_quarter: this.ticksPerQuarter,
+      };
+    });
+  }
+
   //----- from bytes -----//
   fromBytes(bytes) {
     const chunks = this._chunkitize(bytes);
@@ -253,73 +345,18 @@ export class Midi {
   //----- to bytes -----//
   toBytes() {
     const bytes = [77, 84, 104, 100, 0, 0, 0, 6, 0, 1];
-    bytes.push(...this._unsignedToBigEndian(this._tracks.length, 2));
-    bytes.push(...this._unsignedToBigEndian(this.ticksPerQuarter, 2));
-    let trackBytes = [];
-    let ticks = 0;
-    for (event of this._tracks[0].events) {
-      trackBytes.push(...this._writeDelta(event.ticks - ticks));
-      if (event.type == 'tempo') {
-        trackBytes.push(...[0xff, 0x51, 0x03]);
-        trackBytes.push(...this._unsignedToBigEndian(event.usPerQuarter, 3));
-      } else if (event.type == 'time_sig') {
-        trackBytes.push(...[0xff, 0x58, 0x04]);
-        trackBytes.push(...[event.top, this._ilog2(event.bottom), 24, 8]);
-      } else if (event.type == 'key_sig') {
-        trackBytes.push(...[0xff, 0x59, 0x02]);
-        let sharps = event.sharps;
-        if (sharps < 0) sharps = 0x100 + sharps;
-        trackBytes.push(...[sharps, event.minor ? 1 : 0]);
-      } else throw new Error('unhandled event type: ' + event.type);
-      ticks = event.ticks;
-    }
-    this._writeTrack(trackBytes, bytes);
-    for (const track of this._tracks.slice(1)) {
-      const events = [];
-      for (const event of track.events) {
-        if (event.type =='note') events.push(...this._splitNote(event));
-        else events.push(event);
-      }
-      events.sort((l, r) => {
-        if (l.ticks == r.ticks) {
-          if (l.type == 'note_off' && r.type == 'note_on' ) return -1;
-          if (l.type == 'note_on'  && r.type == 'note_off') return  1;
-        }
-        return l.ticks - r.ticks;
-      });
-      ticks = 0;
-      for (const event of events) {
-        const t = event.ticks;
-        event.ticks -= ticks;
-        ticks = t;
-      }
-      trackBytes = [];
-      for (const event of events) {
-        if (event.type == 'note_on') {
-          trackBytes.push(...this._writeDelta(event.ticks));
-          trackBytes.push(0x90 | event.channel);
-          trackBytes.push(event.number);
-          trackBytes.push(event.velocity);
-        } else if (event.type == 'note_off') {
-          trackBytes.push(...this._writeDelta(event.ticks));
-          trackBytes.push(0x80 | event.channel);
-          trackBytes.push(event.number);
-          trackBytes.push(event.velocity);
-        } else if (event.type == 'control') {
-          trackBytes.push(...this._writeDelta(event.ticks));
-          trackBytes.push(0xb0 | event.channel);
-          trackBytes.push(event.number);
-          trackBytes.push(event.value);
-        } else if (event.type == 'pitch_wheel') {
-          trackBytes.push(...this._writeDelta(event.ticks));
-          trackBytes.push(0xe0 | event.channel);
-          trackBytes.push(event.value & 0x7f);
-          trackBytes.push(event.value >> 7);
-        }
-      }
+    bytes.push(..._unsignedToBigEndian(this._tracks.length, 2));
+    bytes.push(..._unsignedToBigEndian(this.ticksPerQuarter, 2));
+    for (let track of this._tracks) {
+      let trackBytes = [];
+      for (let deltamsg of track.toDeltamsgs())
+        trackBytes.push(
+          ...this._writeDelta(deltamsg.delta),
+          ...deltamsg.msg,
+        );
       this._writeTrack(trackBytes, bytes);
-      return bytes;
-    }//tracks
+    }
+    return bytes;
   }
 
   _writeTrack(trackBytes, bytes) {
@@ -329,17 +366,9 @@ export class Midi {
     trackBytes.push(...[1, 0xff, 0x2f, 0]);
     trackBytes.unshift(
       ...[77, 84, 114, 107],
-      ...this._unsignedToBigEndian(trackBytes.length, 4),
+      ..._unsignedToBigEndian(trackBytes.length, 4),
     );
     bytes.push(...trackBytes);
-  }
-
-  _unsignedToBigEndian(u, size) {
-    const result = [];
-    for (let i = 0; i < size; ++i) {
-      result.push((u >> ((size - 1 - i) * 8)) & 0xff);
-    }
-    return result;
   }
 
   _writeDelta(ticks) {
@@ -352,33 +381,6 @@ export class Midi {
         return result;
       }
     }
-  }
-
-  _ilog2(x) {
-    let result = -1;
-    while (x) {
-      x >>= 1;
-      ++result;
-    }
-    return result;
-  }
-
-  _splitNote(note) {
-    return [
-      {
-        type: 'note_on',
-        ticks: note.ticks,
-        channel: note.channel,
-        number: note.number,
-        velocity: note.velocityOn,
-      }, {
-        type: 'note_off',
-        ticks: note.ticks + note.duration,
-        channel: note.channel,
-        number: note.number,
-        velocity: note.velocityOff,
-      },
-    ];
   }
 
   //----- rendering -----//

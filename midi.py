@@ -23,7 +23,7 @@ def _chunkitize(file_bytes):
     if len(file_bytes) < header_length:
         raise Exception('header too short')
     if file_bytes[0:len(header_title)] != header_title:
-        raise(Exception('bad header'))
+        raise(Exception(f'header title should be {header_title}, but got {file_bytes[0:len(header_title)]}'))
     chunks = [file_bytes[:header_length]]
     track_title = b'MTrk'
     index = header_length
@@ -237,11 +237,11 @@ class Track(list):
         return result
 
 class Song:
-    def __init__(self, file_path=None, ticks_per_quarter=360):
+    def __init__(self, file_path=None, file_bytes=None, ticks_per_quarter=360):
         self._ticks_per_quarter = ticks_per_quarter
         self._tracks = []
-        if file_path != None:
-            self.load(file_path)
+        if file_path != None or file_bytes != None:
+            self.load(file_path, file_bytes)
 
     def save(self, file_path):
         with open(file_path, 'wb') as file:
@@ -259,8 +259,16 @@ class Song:
                     track_bytes.extend(deltamsg.msg_bytes())
                 _write_track(file, track_bytes)
 
-    def load(self, file_path):
-        with open(file_path, 'rb') as file: chunks = _chunkitize(file.read())
+    def load(self, file_path=None, file_bytes=None):
+        if sum({True: 1, False: 0}[i != None] for i in [file_path, file_bytes]) > 1:
+            raise Exception('cannot specify file more than one way')
+        if file_path:
+            with open(file_path, 'rb') as file: file_bytes = file.read()
+        elif file_bytes:
+            file_bytes = bytes(file_bytes)
+        else:
+            raise Exception('must specify file')
+        chunks = _chunkitize(file_bytes)
         self._ticks_per_quarter = _big_endian_to_unsigned(chunks[0][12:14])
         if _big_endian_to_unsigned(chunks[0][8:10]) != 1:
             raise Exception('unhandled file type')
