@@ -491,6 +491,8 @@ export class Midi {
     const yi = trackIndex ? this._noteY(trackIndex) : 24;
     let ticks, y = yi;
     for (const event of events) {
+      if (event.ticks < this._window.ticksI) continue;
+      if (event.ticks > this._window.ticksI + this._window.ticksD) break;
       if (event.ticks != ticks) {
         y = yi;
         ticks = event.ticks;
