@@ -218,6 +218,30 @@ export class Midi {
         }
       },
     });
+    document.getElementsByTagName('body')[0].onkeydown = (event) => {
+      do {
+        // immediate commands
+        let cmd = {
+          Backspace: () => this._message = this._message.slice(0, -1),
+          Escape: () => this._message = '',
+        }[event.key];
+        if (cmd) { cmd(); break; }
+        // complex commands
+        if (event.key == 'Enter') {
+          let cmd = {
+            ':': () => this.goToBar(...this._params()),
+          }[this._message[0]];
+          if (cmd){
+            cmd();
+            this._message = '';
+          }
+          break;
+        }
+        if (event.key != 'Shift')
+          this._message += event.key;
+      } while (false);
+      this._render();
+    };
     // constants
     this._trackHeaderSize = 8;
     this._staves = [
@@ -229,6 +253,7 @@ export class Midi {
       [ 4, 'rgb(32, 32, 32)'],
       [ 0, 'rgb( 0, 64,  0)'],
     ];
+    this._messageH = 16;
     // variables
     this.ticksPerQuarter = 360;
     this.duration = this.ticksPerQuarter;
@@ -243,6 +268,7 @@ export class Midi {
       notesPerStaff: 24,
     };
     this._selected = [];
+    this._message = '';
   }
 
   fromDeltamsgs(deltamsgs) {
@@ -274,6 +300,17 @@ export class Midi {
         deltamsgs: track.toDeltamsgs(),
         ticks_per_quarter: this.ticksPerQuarter,
       };
+    });
+  }
+
+  _params(offset = 1) {
+    return this._message.substring(offset).split(' ').map((v, i) => {
+      return {
+        float: parseFloat(v),
+        int: parseInt(v),
+        str: v,
+        undefined: parseInt(v),
+      }[arguments[i]];
     });
   }
 
@@ -383,10 +420,10 @@ export class Midi {
     }
   }
 
-  //----- rendering -----//
+  //----- render -----//
   _render() {
     this._ctx = this._canvas.getContext('2d');
-    // background
+    // render background
     this._rect(0, 0, { w: this._canvas.width, h: this._canvas.height, color: 'black' });
     const qi = Math.floor(this._window.ticksI / this.ticksPerQuarter);
     for (let q = qi; q < qi + this._window.ticksD / this.ticksPerQuarter; ++q) {
@@ -402,10 +439,10 @@ export class Midi {
         },
       )
     }
-    // regular tracks
+    // render regular tracks
     for (let trackIndex = 1; trackIndex < this._tracks.length; ++trackIndex) {
       const track = this._tracks[trackIndex];
-      // staff
+      // render staff
       for (let i = 0; i < this._window.notesPerStaff; i += 24)
         for (const [number, color] of this._staves)
           this._renderNote(
@@ -425,7 +462,7 @@ export class Midi {
           color: track.octave > 5 ? 'rgb(0, 128, 0)' : 'rgb(128, 0, 0)'
         });
       }
-      // events
+      // render events
       for (const note of track.events) {
         if (note.type != 'note') continue;
         this._renderNote(
@@ -439,9 +476,15 @@ export class Midi {
       }
       this._renderEvents(track.events.filter((i) => i.type != 'note'), trackIndex);
     }
-    // first track
+    // render first track
     if (this._tracks.length)
       this._renderEvents(this._tracks[0].events, 0);
+    // render message
+    this._rect(
+      0, this._canvas.height - this._messageH,
+      { w: this._canvas.width, h: this._messageH, color: 'rgba(0, 0, 0, 0.5)' },
+    );
+    this._text(' ' + this._message, 0, this._canvas.height - this._messageH + 12);
   }
 
   _renderEvents(events, trackIndex) {
@@ -507,11 +550,12 @@ export class Midi {
     this._ctx.stroke();
   }
 
-  _text(text, xi, yi, options) {
-    const font = options.font || 'Courier New';
+  _text(text, xi, yi, options = {}) {
     const h = options.h || '12px';
+    const font = options.font || 'Courier New';
+    const color = options.color || 'white';
     this._ctx.font = `${h} ${font}`;
-    this._ctx.fillStyle = options.color;
+    this._ctx.fillStyle = color;
     this._ctx.fillText(text, xi, yi);
   }
 
@@ -604,5 +648,23 @@ export class Midi {
   _selectEvent(trackIndex, eventIndex) {
     this._tracks[trackIndex].events[eventIndex].selected = true;
     this._selected.push([trackIndex, eventIndex]);
+  }
+
+  //----- navigation -----//
+  goToBar(bar) {
+    let currBar = 0;
+    let timeSig = {top: 4, bottom: 4};
+    this._window.ticksI = 0;
+    for (event of this._tracks[0].events) {
+      if (currBar >= bar) break;
+      const ticksInBar = this.ticksPerQuarter * 4 * timeSig.top / timeSig.bottom;
+      while (event.ticks - this._window.ticksI >= ticksInBar) {
+        this._window.ticksI += ticksInBar;
+        ++currBar;
+        if (currBar >= bar) break;
+      }
+      if (event.type == 'time_sig') timeSig = event;
+    }
+    this._render();
   }
 }
