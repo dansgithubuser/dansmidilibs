@@ -30,6 +30,14 @@ function _ilog2(x) {
   return result;
 }
 
+function _eventCmp(l, r) {
+  if (l.ticks == r.ticks) {
+    if (l.type == 'note_off' && r.type == 'note_on' ) return -1;
+    if (l.type == 'note_on'  && r.type == 'note_off') return  1;
+  }
+  return l.ticks - r.ticks;
+}
+
 class Track {
   constructor(pairs) {
     this.events = [];
@@ -99,6 +107,7 @@ class Track {
     }
   }
 
+  // method toDeltamsgs
   toDeltamsgs() {
     const deltamsgs = [];
     // split notes
@@ -107,13 +116,7 @@ class Track {
       if (event.type =='note') events.push(...this._splitNote(event));
       else events.push(event);
     }
-    events.sort((l, r) => {
-      if (l.ticks == r.ticks) {
-        if (l.type == 'note_off' && r.type == 'note_on' ) return -1;
-        if (l.type == 'note_on'  && r.type == 'note_off') return  1;
-      }
-      return l.ticks - r.ticks;
-    });
+    events.sort(_eventCmp);
     // events to deltamsgs
     let ticks = 0;
     for (event of events) {
@@ -147,6 +150,7 @@ class Track {
     return deltamsgs;
   }
 
+  // method calculateOctave
   calculateOctave(ticksI, ticksF) {
     let lowest = 128;
     for (const event of this.events) {
@@ -161,6 +165,7 @@ class Track {
       this.octave = Math.floor(lowest / 12);
   }
 
+  // method _splitNote
   _splitNote(note) {
     return [
       {
@@ -185,27 +190,29 @@ export class Midi {
     this._canvas = canvas;
     listenToTouches(canvas, {
       onTap: (id, x, y) => {
-        const makeNote = () => {
-          return {
-            type: 'note',
-            ticks: this._ticksFromX(x),
-            duration: this.duration,
-            channel: 0,
-            number: this._noteNumberFromY(y),
-            velocityOn: 64,
-            velocityOff: 64,
-          };
+        const trackIndex = this._trackIndexFromY(y);
+        const noteNumber = this._noteNumberFromY(y);
+        const ticks = this._ticksFromX(x);
+        const note = {
+          type: 'note',
+          ticks,
+          duration: this.duration,
+          channel: 0,
+          number: noteNumber,
+          velocityOn: 64,
+          velocityOff: 64,
         };
         if (this.tapMode == 'add') {
-          this._addEvent(this._trackIndexFromY(y), makeNote());
+          this._addEvent(trackIndex, note);
+        } else if (this.tapMode == 'select-space') {
+          this._selectSpace(trackIndex, ticks, noteNumber);
         } else {
-          const trackIndex = this._trackIndexFromY(y);
-          const eventIndex = this._getNoteIndex(trackIndex, this._ticksFromX(x), this._noteNumberFromY(y));
+          const eventIndex = this._getNoteIndex(trackIndex, ticks, noteNumber);
           if (eventIndex != undefined) {
             if (['toggle', 'delete'].includes(this.tapMode)) this._deleteEvent(trackIndex, eventIndex);
-            else if (this.tapMode == 'select') this._selectEvent(trackIndex, eventIndex);
+            else if (this.tapMode == 'select-note') this._selectEvent(trackIndex, eventIndex);
           } else {
-            if (this.tapMode == 'toggle') this._addEvent(trackIndex, makeNote());
+            if (this.tapMode == 'toggle') this._addEvent(trackIndex, note);
           }
         }
         this._render();
@@ -221,24 +228,47 @@ export class Midi {
     document.getElementsByTagName('body')[0].onkeydown = (event) => {
       do {
         // immediate commands
-        let cmd = {
-          Backspace: () => this._message = this._message.slice(0, -1),
-          Escape: () => this._message = '',
-        }[event.key];
-        if (cmd) { cmd(); break; }
+        {
+          const cmd = {
+            Alt: () => {},
+            Backspace: () => this._message = this._message.slice(0, -1),
+            Control: () => {},
+            Escape: () => this._message = '',
+            Shift: () => {},
+          }[event.key];
+          if (cmd) { cmd(); break; }
+        }
         // complex commands
         if (event.key == 'Enter') {
-          let cmd = {
-            ':': () => this.goToBar(...this._params()),
-          }[this._message[0]];
-          if (cmd){
-            cmd();
-            this._message = '';
+          // colon commands
+          if (this._message.startsWith(':')) {
+            const [colon_cmd, ...args] = this._message.split(' ');
+            const cmd = {
+              bend: (...args) => this.bend(...args),
+            }[colon_cmd.slice(1)];
+            if (cmd) {
+              try {
+                cmd(...args);
+                this._message = '';
+              } catch(e) {
+                this._message = e.message;
+              }
+              break;
+            }
+          }
+          // character commands
+          {
+            const cmd = {
+              ':': () => this.goToBar(...this._params()),
+            }[this._message[0]];
+            if (cmd){
+              cmd();
+              this._message = '';
+            }
           }
           break;
         }
-        if (event.key != 'Shift')
-          this._message += event.key;
+        this._message += event.key;
       } while (false);
       this._render();
     };
@@ -267,10 +297,12 @@ export class Midi {
       trackD: 4,
       notesPerStaff: 24,
     };
-    this._selected = [];
+    this._selectedEvents = [];
+    this._selectedSpace = {};
     this._message = '';
   }
 
+  // method fromDeltamsgs
   fromDeltamsgs(deltamsgs) {
     this.ticksPerQuarter = null;
     this._tracks = [];
@@ -294,6 +326,7 @@ export class Midi {
     this._render();
   }
 
+  // method toDeltamsgs
   toDeltamsgs() {
     return this._tracks.map(track => {
       return {
@@ -303,6 +336,7 @@ export class Midi {
     });
   }
 
+  // method _params
   _params(offset = 1) {
     return this._message.substring(offset).split(' ').map((v, i) => {
       return {
@@ -315,6 +349,7 @@ export class Midi {
   }
 
   //----- from bytes -----//
+  // method fromBytes
   fromBytes(bytes) {
     const chunks = this._chunkitize(bytes);
     this.ticksPerQuarter = _bigEndianToUnsigned(chunks[0].slice(12, 14));
@@ -324,6 +359,7 @@ export class Midi {
     this._render();
   }
 
+  // method _chunkitize
   _chunkitize(bytes) {
     const chunks = [bytes.slice(0, 14)];
     let i = chunks[0].length;
@@ -336,6 +372,7 @@ export class Midi {
     return chunks
   }
 
+  // method _getPairs
   _getPairs(trackChunk) {
     const pairs = [];
     let i = this._trackHeaderSize;
@@ -368,6 +405,7 @@ export class Midi {
     return pairs;
   }
 
+  // method _readDelta
   _readDelta(bytes, i) {
     let delta = 0;
     for (let j = 0; j < 4; ++j) {
@@ -380,6 +418,7 @@ export class Midi {
   }
 
   //----- to bytes -----//
+  // method toBytes
   toBytes() {
     const bytes = [77, 84, 104, 100, 0, 0, 0, 6, 0, 1];
     bytes.push(..._unsignedToBigEndian(this._tracks.length, 2));
@@ -396,6 +435,7 @@ export class Midi {
     return bytes;
   }
 
+  // method _writeTrack
   _writeTrack(trackBytes, bytes) {
     //Some idiot midi players ignore the first delta, so start with an empty text event
     const emptyTextEvent = [0, 0xff, 0x01, 0];
@@ -408,6 +448,7 @@ export class Midi {
     bytes.push(...trackBytes);
   }
 
+  // method _writeDelta
   _writeDelta(ticks) {
     const result = [];
     for (let i = 0; i < 4; ++i) {
@@ -421,6 +462,7 @@ export class Midi {
   }
 
   //----- render -----//
+  // method _render
   _render() {
     this._ctx = this._canvas.getContext('2d');
     // render background
@@ -479,6 +521,39 @@ export class Midi {
     // render first track
     if (this._tracks.length)
       this._renderEvents(this._tracks[0].events, 0);
+    // render space selection
+    const selectedSpaceColor = 'rgba(255, 255, 255, 0.2)';
+    if (this._selectedSpace.trackIndex != undefined) this._rect(
+      0,
+      this._trackY(this._selectedSpace.trackIndex),
+      {
+        w: this._canvas.width,
+        h: -this._trackH(),
+        color: selectedSpaceColor,
+      },
+    );
+    if (this._selectedSpace.ticks != undefined) this._rect(
+      this._eventX(this._selectedSpace.ticks),
+      0,
+      {
+        xf: this._eventX(this._selectedSpace.ticks + this.duration),
+        h: this._canvas.height,
+        color: selectedSpaceColor,
+      },
+    );
+    if (this._selectedSpace.noteNumber != undefined) this._rect(
+      0,
+      this._noteY(
+        this._selectedSpace.trackIndex,
+        this._tracks[this._selectedSpace.trackIndex].octave,
+        this._selectedSpace.noteNumber,
+      ),
+      {
+        w: this._canvas.width,
+        h: -this._noteH(),
+        color: selectedSpaceColor,
+      },
+    );
     // render message
     this._rect(
       0, this._canvas.height - this._messageH,
@@ -487,6 +562,7 @@ export class Midi {
     this._text(' ' + this._message, 0, this._canvas.height - this._messageH + 12);
   }
 
+  // method _renderEvents
   _renderEvents(events, trackIndex) {
     const yi = trackIndex ? this._noteY(trackIndex) : 24;
     let ticks, y = yi;
@@ -498,52 +574,68 @@ export class Midi {
         ticks = event.ticks;
       }
       else y += 12;
-      this._text(
-        this._textify(event),
-        this._eventX(event.ticks),
-        y,
-        { color: 'rgb(0, 255, 0)' },
-      );
+      const x = this._eventX(event.ticks);
+      if (event.type == 'pitch_wheel') {
+        this._line(
+          x, y,
+          x, y - (event.value - 0x2000) / 0x1000 * this._noteH(),
+          'rgba(255, 128, 64, 0.5)'
+        );
+      } else {
+        this._text(
+          this._textify(event),
+          x, y,
+          { color: 'rgb(0, 255, 0)' },
+        );
+      }
     }
   }
 
+  // method _textify
   _textify(event) {
     if (event.type == 'tempo')
       return `q=${Math.round(60e6 / event.usPerQuarter)}`;
     return JSON.stringify(event);
   }
 
+  // method _trackH
   _trackH() {
     return this._canvas.height / this._window.trackD;
   }
 
+  // method _trackY
   _trackY(trackIndex) {
     return (trackIndex - this._window.trackI + 1) * this._trackH();
   }
 
+  // method _noteH
   _noteH() {
     return this._trackH() / this._window.notesPerStaff;
   }
 
-  _noteY(trackIndex, octave = 0, note = 0) {
-    return this._trackY(trackIndex) - (note - 12 * octave) * this._noteH();
+  // method _noteY
+  _noteY(trackIndex, octave = 0, number = 0) {
+    return this._trackY(trackIndex) - (number - 12 * octave) * this._noteH();
   }
 
+  // method _eventX
   _eventX(ticks) {
     return (ticks - this._window.ticksI) / this._window.ticksD * this._canvas.width;
   }
 
-  _renderNote(ticks, duration, trackIndex, octave, note, color) {
+  // method _renderNote
+  _renderNote(ticks, duration, trackIndex, octave, number, color) {
     const x = this._eventX(ticks);
-    const y = this._noteY(trackIndex, octave, note);
+    const y = this._noteY(trackIndex, octave, number);
     this._rect(x, y, { xf: this._eventX(ticks + duration), h: -this._noteH(), color });
-    const d = note - 12 * octave;
+    const d = number - 12 * octave;
     if (d < -2 || d > this._window.notesPerStaff + 2) {
       const yf = this._noteY(trackIndex, 0, 11);
       this._curve(x, y, x, yf, x + 24, (y + yf) / 2, color);
     }
   }
 
+  // method _rect
   _rect(xi, yi, options) {
     const xf = options.xf || xi + options.w;
     const yf = options.yf || yi + options.h;
@@ -552,6 +644,7 @@ export class Midi {
     this._ctx.stroke();
   }
 
+  // method _text
   _text(text, xi, yi, options = {}) {
     const h = options.h || '12px';
     const font = options.font || 'Courier New';
@@ -561,6 +654,7 @@ export class Midi {
     this._ctx.fillText(text, xi, yi);
   }
 
+  // method _line
   _line(xi, yi, xf, yf, color) {
     this._ctx.strokeStyle = color;
     this._ctx.beginPath();
@@ -569,6 +663,7 @@ export class Midi {
     this._ctx.stroke();
   }
 
+  // method _curve
   _curve(xi, yi, xf, yf, xm, ym, color) {
     this._ctx.strokeStyle = color;
     this._ctx.beginPath();
@@ -578,21 +673,25 @@ export class Midi {
   }
 
   //----- editing -----//
+  // method addTrack
   addTrack() {
     this._tracks.push(new Track);
     this._render();
   }
 
+  // method deselect
   deselect() {
-    for (const i of this._selected)
+    for (const i of this._selectedEvents)
       this._tracks[i[0]].events[i[1]].selected = false;
-    this._selected = [];
+    this._selectedEvents = [];
+    this.
     this._render();
   }
 
+  // method transpose
   transpose(amount) {
     if (typeof amount == 'string') amount = parseInt(amount);
-    for (const i of this._selected) {
+    for (const i of this._selectedEvents) {
       let n = this._tracks[i[0]].events[i[1]].number;
       n += amount;
       if (n < 0) n = 0;
@@ -602,6 +701,36 @@ export class Midi {
     this._render();
   }
 
+  // method bend
+  bend(start = 0, end = -2, ticksPerEvent = 4) {
+    const { trackIndex, ticks } = this._selectedSpace;
+    if (trackIndex == undefined || ticks == undefined) throw new Error('no space selected');
+    const n = Math.floor(this.duration / ticksPerEvent);
+    const events = [];
+    const value_i = 0x2000 + start * 0x1000;
+    const value_f = 0x2000 + end * 0x1000;
+    for (let i = 0; i < n; ++i) {
+      const t = i / (n - 1);
+      let value = Math.floor((1 - t) * value_i + t * value_f);
+      if (value > 0x3fff) value = 0x3fff;
+      else if (value < 0) value = 0;
+      events.push({
+        type: 'pitch_wheel',
+        ticks: ticks + i * ticksPerEvent,
+        channel: 0,
+        value,
+      });
+    }
+    events.push({
+      type: 'pitch_wheel',
+      ticks: ticks + this.duration,
+      channel: 0,
+      value: 0x2000,
+    });
+    this._addEvents(trackIndex, events);
+  }
+
+  // method _addEvent
   _addEvent(trackIndex, event) {
     if (trackIndex >= this._tracks.length) return;
     const track = this._tracks[trackIndex];
@@ -613,10 +742,20 @@ export class Midi {
     track.events.push(event);
   }
 
+  // method _addEvents
+  _addEvents(trackIndex, events) {
+    if (trackIndex >= this._tracks.length) return;
+    const track = this._tracks[trackIndex];
+    track.events.push(...events);
+    track.events.sort(_eventCmp);
+  }
+
+  // method _ticksFromX
   _ticksFromX(x) {
     return this._quantize(x / this._canvas.width * this._window.ticksD + this._window.ticksI);
   }
 
+  // method _quantize
   _quantize(x, options = {}) {
     if (options.method == 'round')
       return Math.round(x / this.quantizor) * this.quantizor
@@ -624,10 +763,12 @@ export class Midi {
       return Math.floor(x / this.quantizor) * this.quantizor;
   }
 
+  // method _trackIndexFromY
   _trackIndexFromY(y) {
     return Math.ceil(y / this._trackH() + this._window.trackI - 1);
   }
 
+  // method _noteNumberFromY
   _noteNumberFromY(y) {
     const trackIndex = this._trackIndexFromY(y);
     if (trackIndex >= this._tracks.length) return;
@@ -635,7 +776,8 @@ export class Midi {
     return Math.floor((this._trackY(trackIndex) - y) / this._noteH() + 12 * track.octave);
   }
 
-  _getNoteIndex(trackIndex, ticks, number){
+  // method _getNoteIndex
+  _getNoteIndex(trackIndex, ticks, number) {
     if (trackIndex >= this._tracks.length) return;
     const track = this._tracks[trackIndex];
     for (let i = 0; i < track.events.length; ++i)
@@ -643,16 +785,28 @@ export class Midi {
         return i;
   }
 
+  // method _deleteEvent
   _deleteEvent(trackIndex, eventIndex) {
     this._tracks[trackIndex].events.splice(eventIndex, 1);
   }
 
+  // method _selectEvent
   _selectEvent(trackIndex, eventIndex) {
     this._tracks[trackIndex].events[eventIndex].selected = true;
-    this._selected.push([trackIndex, eventIndex]);
+    this._selectedEvents.push([trackIndex, eventIndex]);
+  }
+
+  // method _selectSpace
+  _selectSpace(trackIndex, ticks, noteNumber) {
+    this._selectedSpace = {
+      trackIndex,
+      ticks,
+      noteNumber,
+    };
   }
 
   //----- navigation -----//
+  // method goToBar
   goToBar(bar) {
     let currBar = 0;
     let timeSig = {top: 4, bottom: 4};
