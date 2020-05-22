@@ -285,9 +285,7 @@ export class Midi {
     ];
     this._messageH = 16;
     // variables
-    this.ticksPerQuarter = 360;
-    this.duration = this.ticksPerQuarter;
-    this.quantizor = this.ticksPerQuarter;
+    this._setTicksPerQuarter(360);
     this.tapMode = 'add';
     this._tracks = [new Track(), new Track()];
     this._window = {
@@ -312,7 +310,7 @@ export class Midi {
         continue;
       }
       if (this.ticksPerQuarter == null) {
-        this.ticksPerQuarter = line.ticks_per_quarter;
+        this._setTicksPerQuarter(line.ticks_per_quarter);
       } else if (this.ticksPerQuarter != line.ticks_per_quarter) {
         console.error("ticks per quarter doesn't match")
         this._tracks.push(new Track);
@@ -336,6 +334,13 @@ export class Midi {
     });
   }
 
+  // method _setTicksPerQuarter
+  _setTicksPerQuarter(ticks) {
+    this.ticksPerQuarter = ticks;
+    this.duration = this.ticksPerQuarter;
+    this.quantizor = this.ticksPerQuarter;
+  }
+
   // method _params
   _params(offset = 1) {
     return this._message.substring(offset).split(' ').map((v, i) => {
@@ -352,7 +357,7 @@ export class Midi {
   // method fromBytes
   fromBytes(bytes) {
     const chunks = this._chunkitize(bytes);
-    this.ticksPerQuarter = _bigEndianToUnsigned(chunks[0].slice(12, 14));
+    this._setTicksPerQuarter(_bigEndianToUnsigned(chunks[0].slice(12, 14)));
     this._tracks = [];
     for (const chunk of chunks.slice(1))
       this._tracks.push(new Track(this._getPairs(chunk)));
