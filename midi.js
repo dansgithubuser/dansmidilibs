@@ -634,7 +634,7 @@ export class Midi {
     const y = this._noteY(trackIndex, octave, number);
     this._rect(x, y, { xf: this._eventX(ticks + duration), h: -this._noteH(), color });
     const d = number - 12 * octave;
-    if (d < -2 || d > this._window.notesPerStaff + 2) {
+    if (d < 0 || d >= this._window.notesPerStaff) {
       const yf = this._noteY(trackIndex, 0, 11);
       this._curve(x, y, x, yf, x + 24, (y + yf) / 2, color);
     }
