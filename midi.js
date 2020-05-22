@@ -195,7 +195,7 @@ export class Midi {
         const ticks = this._ticksFromX(x);
         const note = {
           type: 'note',
-          ticks,
+          ticks: this._quantize(ticks),
           duration: this.duration,
           channel: 0,
           number: noteNumber,
@@ -757,7 +757,7 @@ export class Midi {
 
   // method _ticksFromX
   _ticksFromX(x) {
-    return this._quantize(x / this._canvas.width * this._window.ticksD + this._window.ticksI);
+    return Math.floor(x / this._canvas.width * this._window.ticksD + this._window.ticksI);
   }
 
   // method _quantize
