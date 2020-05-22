@@ -689,7 +689,7 @@ export class Midi {
     for (const i of this._selectedEvents)
       this._tracks[i[0]].events[i[1]].selected = false;
     this._selectedEvents = [];
-    this.
+    this._selectedSpace = {};
     this._render();
   }
 
