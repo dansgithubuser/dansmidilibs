@@ -225,7 +225,9 @@ export class Midi {
         }
       },
     });
-    document.getElementsByTagName('body')[0].onkeydown = (event) => {
+    const body = document.getElementsByTagName('body')[0];
+    body.onkeydown = (event) => {
+      if (event.srcElement != body) return;
       do {
         // immediate commands
         {
