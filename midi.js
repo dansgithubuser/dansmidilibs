@@ -248,19 +248,19 @@ export class Midi {
                 this.deselect();
               },
               Shift: () => {},
-              'K': () => this.move( 0,  0, +1),
-              'J': () => this.move( 0,  0, -1),
           };
           // normal
-          if (this._keyMode == 'normal') {
+          if (this._keyMode == 'normal' && !this._message.startsWith(':')) {
             commands = {
               ' ': () => this.selectSpace(),
               'j': () => this.move(+1,  0,  0),
               'k': () => this.move(-1,  0,  0),
               'l': () => this.move( 0, +1,  0),
               'h': () => this.move( 0, -1,  0),
+              'K': () => this.move( 0,  0, +1),
+              'J': () => this.move( 0,  0, -1),
               'i': () => {
-                this.selectSpace();
+                if (!this.selectedSpace()) this.selectSpace();
                 this._keyMode = 'insert';
               },
               's': () => this.selectEvent(),
@@ -302,6 +302,7 @@ export class Midi {
             const [colon_cmd, ...args] = this._message.split(' ');
             const cmd = {
               bend: (...args) => this.bend(...args),
+              'track.add': () => this.addTrack(),
             }[colon_cmd.slice(1)];
             if (cmd) {
               try {
