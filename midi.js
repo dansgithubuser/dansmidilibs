@@ -235,10 +235,35 @@ export class Midi {
             Alt: () => {},
             Backspace: () => this._message = this._message.slice(0, -1),
             Control: () => {},
-            Escape: () => this._message = '',
+            Escape: () => {
+              if (this._message != '') {
+                this._message = '';
+                return;
+              }
+              this.deselect();
+            },
             Shift: () => {},
+            ' ': () => {
+              const trackIndex = Math.floor(this._window.trackI) + 1;
+              this._selectSpace(
+                trackIndex,
+                this._quantize(this._window.ticksI, { offset: 1 }),
+                this._tracks[trackIndex].octave * 12,
+              );
+            },
+            'j': () => this.move(+1,  0,  0),
+            'k': () => this.move(-1,  0,  0),
+            'l': () => this.move( 0, +1,  0),
+            'h': () => this.move( 0, -1,  0),
+            'K': () => this.move( 0,  0, +1),
+            'J': () => this.move( 0,  0, -1),
           }[event.key];
-          if (cmd) { cmd(); break; }
+          const reps = parseInt(this._message) || 1;
+          if (cmd) {
+            for (let i = 0; i < reps; ++i) cmd();
+            this._message = '';
+            break;
+          }
         }
         // complex commands
         if (event.key == 'Enter') {
@@ -764,10 +789,9 @@ export class Midi {
 
   // method _quantize
   _quantize(x, options = {}) {
-    if (options.method == 'round')
-      return Math.round(x / this.quantizor) * this.quantizor
-    else
-      return Math.floor(x / this.quantizor) * this.quantizor;
+    const method = Math[options.method || 'floor'];
+    const offset = options.offset || 0;
+    return method(x / this.quantizor + offset) * this.quantizor;
   }
 
   // method _trackIndexFromY
@@ -805,11 +829,19 @@ export class Midi {
 
   // method _selectSpace
   _selectSpace(trackIndex, ticks, noteNumber) {
-    this._selectedSpace = {
-      trackIndex,
-      ticks,
-      noteNumber,
-    };
+    if (
+      trackIndex < 0 || trackIndex >= this._tracks.length
+      || ticks < 0
+      || noteNumber < 0 || noteNumber > 127
+    ) {
+      this._selectSpace();
+    } else {
+      this._selectedSpace = {
+        trackIndex,
+        ticks,
+        noteNumber,
+      };
+    }
   }
 
   //----- navigation -----//
@@ -828,6 +860,39 @@ export class Midi {
       }
       if (event.type == 'time_sig') timeSig = event;
     }
+    if (this._selectedSpace.ticks)
+      this._selectedSpace.ticks = this._window.ticksI;
     this._render();
+  }
+
+  // method move
+  move(dTrack, dTicks, dNoteNumber) {
+    if (this._selectedSpace.trackIndex != undefined && dTrack) {
+      this._selectedSpace.trackIndex += dTrack;
+      this._selectedSpace.trackIndex = Math.min(this._selectedSpace.trackIndex, this._tracks.length - 1);
+      this._selectedSpace.trackIndex = Math.max(this._selectedSpace.trackIndex, 0);
+      this._selectedSpace.noteNumber %= this._window.notesPerStaff;
+      this._selectedSpace.noteNumber += this._tracks[this._selectedSpace.trackIndex].octave * 12;
+      if (this._selectedSpace.trackIndex < this._window.trackI)
+        this._window.trackI = this._selectedSpace.trackIndex;
+      else if (this._selectedSpace.trackIndex >= this._window.trackI + this._window.trackD)
+        this._window.trackI = this._selectedSpace.trackIndex - this._window.trackD + 1;
+      return;
+    }
+    if (this._selectedSpace.ticks != undefined && dTicks) {
+      this._selectedSpace.ticks += dTicks * this.quantizor;
+      this._selectedSpace.ticks = Math.max(this._selectedSpace.ticks, 0);
+      if (this._selectedSpace.ticks < this._window.ticksI)
+        this._window.ticksI = this._selectedSpace.ticks;
+      else if (this._selectedSpace.ticks >= this._window.ticksI + this._window.ticksD)
+        this._window.ticksI = this._selectedSpace.ticks - this._window.ticksD + this.quantizor;
+      return;
+    }
+    if (this._selectedSpace.noteNumber != undefined && dNoteNumber) {
+      this._selectedSpace.noteNumber += dNoteNumber;
+      this._selectedSpace.noteNumber = Math.min(this._selectedSpace.noteNumber, 127);
+      this._selectedSpace.noteNumber = Math.max(this._selectedSpace.noteNumber, 0);
+      return;
+    }
   }
 }
