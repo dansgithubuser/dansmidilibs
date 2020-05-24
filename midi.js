@@ -319,6 +319,7 @@ export class Midi {
             const cmd = {
               bend: (...args) => this.bend(...args),
               'track.add': () => this.addTrack(),
+              transpose: (...args) => transpose(...args),
             }[colon_cmd.slice(1)];
             if (cmd) {
               try {
