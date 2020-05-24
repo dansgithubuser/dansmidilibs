@@ -231,8 +231,7 @@ export class Midi {
       do {
         // immediate commands
         {
-          // common
-          let commands = {
+          const cmd = {
               Alt: () => {},
               Backspace: () => this._message = this._message.slice(0, -1),
               Control: () => {},
@@ -248,9 +247,17 @@ export class Midi {
                 this.deselect();
               },
               Shift: () => {},
-          };
-          // normal
-          if (this._keyMode == 'normal' && !this._message.startsWith(':')) {
+          }[event.key];
+          if (cmd) {
+            cmd();
+            break;
+          }
+        }
+        // single-character commands
+        let commands;
+        if (!this._message.length) {
+          // single-character commands -- normal
+          if (this._keyMode == 'normal') {
             commands = {
               ' ': () => this.selectSpace(),
               'j': () => this.move(+1,  0,  0),
@@ -267,7 +274,7 @@ export class Midi {
               ...commands,
             };
           }
-          // insert
+          // single-character commands -- insert
           if (this._keyMode == 'insert') {
             commands = {
               'z': () => this.addNote(0),
@@ -283,10 +290,19 @@ export class Midi {
               'j': () => this.addNote(10),
               'm': () => this.addNote(11),
               ' ': () => this.move(0, 1, 0),
+              '1': () => this.duration = 1 * this.quantizor,
+              '2': () => this.duration = 2 * this.quantizor,
+              '3': () => this.duration = 3 * this.quantizor,
+              '4': () => this.duration = 4 * this.quantizor,
+              '5': () => this.duration = 5 * this.quantizor,
+              '6': () => this.duration = 6 * this.quantizor,
+              '7': () => this.duration = 7 * this.quantizor,
+              '8': () => this.duration = 8 * this.quantizor,
+              '9': () => this.duration = 9 * this.quantizor,
               ...commands,
             };
           }
-          // execute
+          // single-character commands -- execute
           const cmd = commands[event.key];
           if (cmd) {
             const reps = parseInt(this._message) || 1;
@@ -318,6 +334,7 @@ export class Midi {
           {
             const cmd = {
               ':': () => this.goToBar(...this._params()),
+              '/': () => { this.quantizor = this.ticksPerQuarter * 4 / this._params()[0] },
             }[this._message[0]];
             if (cmd){
               cmd();
@@ -985,7 +1002,7 @@ export class Midi {
       return;
     }
     if (this._selectedSpace.ticks != undefined && dTicks) {
-      this._selectedSpace.ticks += dTicks * this.quantizor;
+      this._selectedSpace.ticks += dTicks * this.duration;
       this._selectedSpace.ticks = Math.max(this._selectedSpace.ticks, 0);
       if (this._selectedSpace.ticks < this._window.ticksI)
         this._window.ticksI = this._selectedSpace.ticks;
