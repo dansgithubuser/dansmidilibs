@@ -231,37 +231,66 @@ export class Midi {
       do {
         // immediate commands
         {
-          const cmd = {
-            Alt: () => {},
-            Backspace: () => this._message = this._message.slice(0, -1),
-            Control: () => {},
-            Escape: () => {
-              if (this._message != '') {
-                this._message = '';
-                return;
-              }
-              this.deselect();
-            },
-            Shift: () => {},
-            ' ': () => {
-              const trackIndex = Math.floor(this._window.trackI) + 1;
-              this._selectSpace(
-                trackIndex,
-                this._quantize(this._window.ticksI, { offset: 1 }),
-                this._tracks[trackIndex].octave * 12,
-              );
-            },
-            'j': () => this.move(+1,  0,  0),
-            'k': () => this.move(-1,  0,  0),
-            'l': () => this.move( 0, +1,  0),
-            'h': () => this.move( 0, -1,  0),
-            'K': () => this.move( 0,  0, +1),
-            'J': () => this.move( 0,  0, -1),
-          }[event.key];
-          const reps = parseInt(this._message) || 1;
+          // common
+          let commands = {
+              Alt: () => {},
+              Backspace: () => this._message = this._message.slice(0, -1),
+              Control: () => {},
+              Escape: () => {
+                if (this._message != '') {
+                  this._message = '';
+                  return;
+                }
+                if (this._keyMode != 'normal') {
+                  this._keyMode = 'normal';
+                  return;
+                }
+                this.deselect();
+              },
+              Shift: () => {},
+              'K': () => this.move( 0,  0, +1),
+              'J': () => this.move( 0,  0, -1),
+          };
+          // normal
+          if (this._keyMode == 'normal') {
+            commands = {
+              ' ': () => this.selectSpace(),
+              'j': () => this.move(+1,  0,  0),
+              'k': () => this.move(-1,  0,  0),
+              'l': () => this.move( 0, +1,  0),
+              'h': () => this.move( 0, -1,  0),
+              'i': () => {
+                this.selectSpace();
+                this._keyMode = 'insert';
+              },
+              ...commands,
+            };
+          }
+          // insert
+          if (this._keyMode == 'insert') {
+            commands = {
+              'z': () => this.addNote(0),
+              's': () => this.addNote(1),
+              'x': () => this.addNote(2),
+              'd': () => this.addNote(3),
+              'c': () => this.addNote(4),
+              'v': () => this.addNote(5),
+              'g': () => this.addNote(6),
+              'b': () => this.addNote(7),
+              'h': () => this.addNote(8),
+              'n': () => this.addNote(9),
+              'j': () => this.addNote(10),
+              'm': () => this.addNote(11),
+              ' ': () => this.move(0, 1, 0),
+              ...commands,
+            };
+          }
+          // execute
+          const cmd = commands[event.key];
           if (cmd) {
+            const reps = parseInt(this._message) || 1;
             for (let i = 0; i < reps; ++i) cmd();
-            this._message = '';
+            if (reps > 1) this._message = '';
             break;
           }
         }
@@ -325,6 +354,7 @@ export class Midi {
     this._selectedEvents = [];
     this._selectedSpace = {};
     this._message = '';
+    this._keyMode = 'normal';
   }
 
   // method fromDeltamsgs
@@ -591,7 +621,9 @@ export class Midi {
       0, this._canvas.height - this._messageH,
       { w: this._canvas.width, h: this._messageH, color: 'rgba(0, 0, 0, 0.5)' },
     );
-    this._text(' ' + this._message, 0, this._canvas.height - this._messageH + 12);
+    let prefix = ' ';
+    if (this._keyMode == 'insert') prefix = 'i';
+    this._text(prefix + this._message, 0, this._canvas.height - this._messageH + 12);
   }
 
   // method _renderEvents
@@ -720,6 +752,16 @@ export class Midi {
     this._render();
   }
 
+  // method selectSpace
+  selectSpace() {
+    const trackIndex = Math.floor(this._window.trackI) + 1;
+    this._selectSpace(
+      trackIndex,
+      this._quantize(this._window.ticksI, { offset: 1 }),
+      this._tracks[trackIndex].octave * 12,
+    );
+  }
+
   // method transpose
   transpose(amount) {
     if (typeof amount == 'string') amount = parseInt(amount);
@@ -842,6 +884,25 @@ export class Midi {
         noteNumber,
       };
     }
+  }
+
+  // method addNote
+  addNote(number) {
+    if (
+      this._selectedSpace.trackIndex == undefined
+      || this._selectedSpace.ticks == undefined
+      || this._selectedSpace.noteNumber == undefined
+    ) return;
+    this._addEvent(this._selectedSpace.trackIndex, {
+      type: 'note',
+      ticks: this._selectedSpace.ticks,
+      duration: this.duration,
+      channel: 0,
+      number: this._selectedSpace.noteNumber % 12 + number,
+      velocityOn: 64,
+      velocityOff: 64,
+    });
+    this.move(0, 1, 0);
   }
 
   //----- navigation -----//
