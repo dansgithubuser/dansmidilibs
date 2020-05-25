@@ -255,7 +255,7 @@ export class Midi {
         }
         // single-character commands
         let commands;
-        if (!this._message.length) {
+        if (!this._message || !isNaN(parseInt(this._message))) {
           // single-character commands -- normal
           if (this._keyMode == 'normal') {
             commands = {
