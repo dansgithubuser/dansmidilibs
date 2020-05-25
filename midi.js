@@ -319,7 +319,9 @@ export class Midi {
             const cmd = {
               bend: (...args) => this.bend(...args),
               'track.add': () => this.addTrack(),
-              transpose: (...args) => transpose(...args),
+              transpose: (amount) => transpose(amount),
+              'window.quarters': (n) => this._window.ticksD = parseInt(n) * this.ticksPerQuarter || this._window.ticksD,
+              'window.tracks': (n) => this._window.trackD = parseInt(n) || this._window.trackD,
             }[colon_cmd.slice(1)];
             if (cmd) {
               try {
