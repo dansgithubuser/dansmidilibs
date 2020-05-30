@@ -195,7 +195,7 @@ export class Midi {
         const ticks = this._ticksFromX(x);
         const note = {
           type: 'note',
-          ticks,
+          ticks: this._quantize(ticks),
           duration: this.duration,
           channel: 0,
           number: noteNumber,
@@ -225,18 +225,91 @@ export class Midi {
         }
       },
     });
-    document.getElementsByTagName('body')[0].onkeydown = (event) => {
+    const body = document.getElementsByTagName('body')[0];
+    body.onkeydown = (event) => {
+      if (event.srcElement != body) return;
       do {
         // immediate commands
         {
           const cmd = {
-            Alt: () => {},
-            Backspace: () => this._message = this._message.slice(0, -1),
-            Control: () => {},
-            Escape: () => this._message = '',
-            Shift: () => {},
+              Alt: () => {},
+              Backspace: () => this._message = this._message.slice(0, -1),
+              Control: () => {},
+              Escape: () => {
+                if (this._message != '') {
+                  this._message = '';
+                  return;
+                }
+                if (this._keyMode != 'normal') {
+                  this._keyMode = 'normal';
+                  return;
+                }
+                this.deselect();
+              },
+              Shift: () => {},
           }[event.key];
-          if (cmd) { cmd(); break; }
+          if (cmd) {
+            cmd();
+            break;
+          }
+        }
+        // single-character commands
+        let commands;
+        if (!this._message || !isNaN(parseInt(this._message))) {
+          // single-character commands -- normal
+          if (this._keyMode == 'normal') {
+            commands = {
+              ' ': () => this.selectSpace(),
+              'j': () => this.move(+1,  0,  0),
+              'k': () => this.move(-1,  0,  0),
+              'l': () => this.move( 0, +1,  0),
+              'h': () => this.move( 0, -1,  0),
+              'K': () => this.move( 0,  0, +1),
+              'J': () => this.move( 0,  0, -1),
+              'i': () => {
+                if (!this.selectedSpace()) this.selectSpace();
+                this._keyMode = 'insert';
+              },
+              's': () => this.selectEvent(),
+              ...commands,
+            };
+          }
+          // single-character commands -- insert
+          if (this._keyMode == 'insert') {
+            commands = {
+              'z': () => this.addNote(0),
+              's': () => this.addNote(1),
+              'x': () => this.addNote(2),
+              'd': () => this.addNote(3),
+              'c': () => this.addNote(4),
+              'v': () => this.addNote(5),
+              'g': () => this.addNote(6),
+              'b': () => this.addNote(7),
+              'h': () => this.addNote(8),
+              'n': () => this.addNote(9),
+              'j': () => this.addNote(10),
+              'm': () => this.addNote(11),
+              ' ': () => this.move(0, 1, 0),
+              '1': () => this.duration = 1 * this.quantizor,
+              '2': () => this.duration = 2 * this.quantizor,
+              '3': () => this.duration = 3 * this.quantizor,
+              '4': () => this.duration = 4 * this.quantizor,
+              '5': () => this.duration = 5 * this.quantizor,
+              '6': () => this.duration = 6 * this.quantizor,
+              '7': () => this.duration = 7 * this.quantizor,
+              '8': () => this.duration = 8 * this.quantizor,
+              '9': () => this.duration = 9 * this.quantizor,
+              ...commands,
+            };
+          }
+          // single-character commands -- execute
+          const cmd = commands[event.key];
+          if (cmd) {
+            const reps = parseInt(this._message) || 1;
+            for (let i = 0; i < reps; ++i) cmd();
+            if (reps > 1) this._message = '';
+            break;
+          }
         }
         // complex commands
         if (event.key == 'Enter') {
@@ -245,6 +318,10 @@ export class Midi {
             const [colon_cmd, ...args] = this._message.split(' ');
             const cmd = {
               bend: (...args) => this.bend(...args),
+              'track.add': () => this.addTrack(),
+              transpose: (amount) => transpose(amount),
+              'window.quarters': (n) => this._window.ticksD = parseInt(n) * this.ticksPerQuarter || this._window.ticksD,
+              'window.tracks': (n) => this._window.trackD = parseInt(n) || this._window.trackD,
             }[colon_cmd.slice(1)];
             if (cmd) {
               try {
@@ -260,6 +337,7 @@ export class Midi {
           {
             const cmd = {
               ':': () => this.goToBar(...this._params()),
+              '/': () => { this.quantizor = this.ticksPerQuarter * 4 / this._params()[0] },
             }[this._message[0]];
             if (cmd){
               cmd();
@@ -298,6 +376,7 @@ export class Midi {
     this._selectedEvents = [];
     this._selectedSpace = {};
     this._message = '';
+    this._keyMode = 'normal';
   }
 
   // method fromDeltamsgs
@@ -564,7 +643,9 @@ export class Midi {
       0, this._canvas.height - this._messageH,
       { w: this._canvas.width, h: this._messageH, color: 'rgba(0, 0, 0, 0.5)' },
     );
-    this._text(' ' + this._message, 0, this._canvas.height - this._messageH + 12);
+    let prefix = ' ';
+    if (this._keyMode == 'insert') prefix = 'i';
+    this._text(prefix + this._message, 0, this._canvas.height - this._messageH + 12);
   }
 
   // method _renderEvents
@@ -634,7 +715,7 @@ export class Midi {
     const y = this._noteY(trackIndex, octave, number);
     this._rect(x, y, { xf: this._eventX(ticks + duration), h: -this._noteH(), color });
     const d = number - 12 * octave;
-    if (d < -2 || d > this._window.notesPerStaff + 2) {
+    if (d < 0 || d >= this._window.notesPerStaff) {
       const yf = this._noteY(trackIndex, 0, 11);
       this._curve(x, y, x, yf, x + 24, (y + yf) / 2, color);
     }
@@ -684,13 +765,66 @@ export class Midi {
     this._render();
   }
 
+  // method selectEvent
+  selectEvent() {
+    if (!this.selectedSpace()) return;
+    let eventIndexes = [];
+    const track = this._tracks[this._selectedSpace.trackIndex];
+    for (let i = 0; i < track.events.length; ++i) {
+      const event = track.events[i];
+      if (event.ticks < this._selectedSpace.ticks) continue;
+      if (event.ticks > this._selectedSpace.ticks + this.duration) break;
+      eventIndexes.push(i);
+    }
+    // fully-contained
+    let filtered = eventIndexes.filter(i => {
+      const event = track.events[i];
+      return (
+        this._selectedSpace.ticks <= event.ticks
+        && event.ticks < this._selectedSpace.ticks + this.duration
+      );
+    });
+    if (filtered.length) eventIndexes = filtered;
+    // same note
+    filtered = eventIndexes.filter(i => {
+      const event = track.events[i];
+      return event.type == 'note' && event.number == this._selectedSpace.noteNumber;
+    });
+    if (filtered.length) eventIndexes = filtered;
+    // select
+    for (const eventIndex of eventIndexes)
+      this._selectEvent(this._selectedSpace.trackIndex, eventIndex);
+  }
+
   // method deselect
   deselect() {
-    for (const i of this._selectedEvents)
-      this._tracks[i[0]].events[i[1]].selected = false;
-    this._selectedEvents = [];
-    this.
+    if (this._selectedEvents.length) {
+      for (const i of this._selectedEvents)
+        this._tracks[i[0]].events[i[1]].selected = false;
+      this._selectedEvents = [];
+    } else if (this.selectedSpace()) {
+      this._selectedSpace = {};
+    }
     this._render();
+  }
+
+  // method selectedSpace
+  selectedSpace() {
+    return (
+      this._selectedSpace.trackIndex != undefined
+      && this._selectedSpace.ticks != undefined
+      && this._selectedSpace.noteNumber != undefined
+    );
+  }
+
+  // method selectSpace
+  selectSpace() {
+    const trackIndex = Math.floor(this._window.trackI) + 1;
+    this._selectSpace(
+      trackIndex,
+      this._quantize(this._window.ticksI, { offset: 1 }),
+      this._tracks[trackIndex].octave * 12,
+    );
   }
 
   // method transpose
@@ -757,15 +891,14 @@ export class Midi {
 
   // method _ticksFromX
   _ticksFromX(x) {
-    return this._quantize(x / this._canvas.width * this._window.ticksD + this._window.ticksI);
+    return Math.floor(x / this._canvas.width * this._window.ticksD + this._window.ticksI);
   }
 
   // method _quantize
   _quantize(x, options = {}) {
-    if (options.method == 'round')
-      return Math.round(x / this.quantizor) * this.quantizor
-    else
-      return Math.floor(x / this.quantizor) * this.quantizor;
+    const method = Math[options.method || 'floor'];
+    const offset = options.offset || 0;
+    return method(x / this.quantizor + offset) * this.quantizor;
   }
 
   // method _trackIndexFromY
@@ -786,8 +919,11 @@ export class Midi {
     if (trackIndex >= this._tracks.length) return;
     const track = this._tracks[trackIndex];
     for (let i = 0; i < track.events.length; ++i)
-      if (track.events[i].type == 'note' && track.events[i].number == number && noteEndures(track.events[i], ticks))
-        return i;
+      if (
+        track.events[i].type == 'note'
+        && (number == undefined || track.events[i].number == number)
+        && noteEndures(track.events[i], ticks)
+      ) return i;
   }
 
   // method _deleteEvent
@@ -803,11 +939,34 @@ export class Midi {
 
   // method _selectSpace
   _selectSpace(trackIndex, ticks, noteNumber) {
-    this._selectedSpace = {
-      trackIndex,
-      ticks,
-      noteNumber,
-    };
+    if (
+      trackIndex < 0 || trackIndex >= this._tracks.length
+      || ticks < 0
+      || noteNumber < 0 || noteNumber > 127
+    ) {
+      this._selectSpace();
+    } else {
+      this._selectedSpace = {
+        trackIndex,
+        ticks,
+        noteNumber,
+      };
+    }
+  }
+
+  // method addNote
+  addNote(number) {
+    if (!this.selectedSpace()) return;
+    this._addEvent(this._selectedSpace.trackIndex, {
+      type: 'note',
+      ticks: this._selectedSpace.ticks,
+      duration: this.duration,
+      channel: 0,
+      number: this._selectedSpace.noteNumber % 12 + number,
+      velocityOn: 64,
+      velocityOff: 64,
+    });
+    this.move(0, 1, 0);
   }
 
   //----- navigation -----//
@@ -826,6 +985,39 @@ export class Midi {
       }
       if (event.type == 'time_sig') timeSig = event;
     }
+    if (this._selectedSpace.ticks)
+      this._selectedSpace.ticks = this._window.ticksI;
     this._render();
+  }
+
+  // method move
+  move(dTrack, dTicks, dNoteNumber) {
+    if (this._selectedSpace.trackIndex != undefined && dTrack) {
+      this._selectedSpace.trackIndex += dTrack;
+      this._selectedSpace.trackIndex = Math.min(this._selectedSpace.trackIndex, this._tracks.length - 1);
+      this._selectedSpace.trackIndex = Math.max(this._selectedSpace.trackIndex, 0);
+      this._selectedSpace.noteNumber %= this._window.notesPerStaff;
+      this._selectedSpace.noteNumber += this._tracks[this._selectedSpace.trackIndex].octave * 12;
+      if (this._selectedSpace.trackIndex < this._window.trackI)
+        this._window.trackI = this._selectedSpace.trackIndex;
+      else if (this._selectedSpace.trackIndex >= this._window.trackI + this._window.trackD)
+        this._window.trackI = this._selectedSpace.trackIndex - this._window.trackD + 1;
+      return;
+    }
+    if (this._selectedSpace.ticks != undefined && dTicks) {
+      this._selectedSpace.ticks += dTicks * this.duration;
+      this._selectedSpace.ticks = Math.max(this._selectedSpace.ticks, 0);
+      if (this._selectedSpace.ticks < this._window.ticksI)
+        this._window.ticksI = this._selectedSpace.ticks;
+      else if (this._selectedSpace.ticks >= this._window.ticksI + this._window.ticksD)
+        this._window.ticksI = this._selectedSpace.ticks - this._window.ticksD + this.quantizor;
+      return;
+    }
+    if (this._selectedSpace.noteNumber != undefined && dNoteNumber) {
+      this._selectedSpace.noteNumber += dNoteNumber;
+      this._selectedSpace.noteNumber = Math.min(this._selectedSpace.noteNumber, 127);
+      this._selectedSpace.noteNumber = Math.max(this._selectedSpace.noteNumber, 0);
+      return;
+    }
   }
 }
