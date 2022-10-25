@@ -100,6 +100,28 @@ class Msg(list):
         if self.type_nibble() == 0x90 and self[2] == 0: return True
         return False
 
+    def us_per_quarter(self):
+        assert self.type() == 'tempo'
+        return _big_endian_to_unsigned(self[3:6])
+
+    def top(self):
+        assert self.type() == 'time_signature'
+        return self[3]
+
+    def bottom(self):
+        assert self.type() == 'time_signature'
+        return 1 << self[4]
+
+    def sharps(self):
+        assert self.type() == 'key_signature'
+        r = self[3]
+        if r & 0x80: r -= 0x100
+        return r
+
+    def minor(self):
+        assert self.type() == 'key_signature'
+        return self[4]
+
     def meta_type(self):
         if self.status() != 0xff:
             raise Exception('not meta')
