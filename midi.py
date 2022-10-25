@@ -95,6 +95,11 @@ class Msg(list):
             raise Exception('no velocity')
         return self[2]
 
+    def is_note_end(self):
+        if self.type_nibble() == 0x80: return True
+        if self.type_nibble() == 0x90 and self[2] == 0: return True
+        return False
+
     def meta_type(self):
         if self.status() != 0xff:
             raise Exception('not meta')
@@ -174,6 +179,9 @@ class Deltamsg:
     def ticks(self):
         return self._ticks
 
+    def duration(self):
+        return self._note_end._ticks
+
     def _list_from_chunk(chunk):
         result = []
         index = _track_header_size
@@ -188,6 +196,12 @@ class Deltamsg:
             result.append(deltamsg)
         if result[-1].msg() != [0xff, 0x2f, 0x00]:
             raise Exception('invalid last msg')
+        for i, v in enumerate(result):
+            if v.msg().type() != 'note_on': continue
+            for u in result[i+1:]:
+                if u.msg().is_note_end() and u.msg().note() == v.msg().note():
+                    v._note_end = u
+                    break
         return result
 
     def _from_chunk(chunk, index, running_status):
