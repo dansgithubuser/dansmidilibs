@@ -132,6 +132,7 @@ class Msg(list):
 
 class Deltamsg:
     def __init__(self, *args):
+        self._ticks = None
         if len(args) == 2:
             if type(args[0]) == int and type(args[1]) == bytes:
                 self._delta = args[0]
@@ -170,14 +171,20 @@ class Deltamsg:
     def msg_bytes(self):
         return bytes(self._msg)
 
+    def ticks(self):
+        return self._ticks
+
     def _list_from_chunk(chunk):
         result = []
         index = _track_header_size
         running_status = None
+        ticks = 0
         while index < len(chunk):
             deltamsg, index, running_status = Deltamsg._from_chunk(
                 chunk, index, running_status
             )
+            ticks += deltamsg.delta()
+            deltamsg._ticks = ticks
             result.append(deltamsg)
         if result[-1].msg() != [0xff, 0x2f, 0x00]:
             raise Exception('invalid last msg')
