@@ -286,6 +286,9 @@ class Song:
         else:
             return self._tracks[track]
 
+    def track(self, i):
+        return self._tracks[i]
+
     def ticks_per_quarter(self):
         return self._ticks_per_quarter
 
