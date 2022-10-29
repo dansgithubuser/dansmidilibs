@@ -94,26 +94,26 @@ class Msg:
         if self.type_nibble() == 0x90 and self[2] == 0: return True
         return False
 
-    def us_per_quarter(self):
+    def tempo_us_per_quarter(self):
         assert self.type() == 'tempo'
         return int.from_bytes(self[3:6], 'big')
 
-    def top(self):
-        assert self.type() == 'time_signature'
+    def time_sig_top(self):
+        assert self.type() == 'time_sig'
         return self[3]
 
-    def bottom(self):
-        assert self.type() == 'time_signature'
+    def time_sig_bottom(self):
+        assert self.type() == 'time_sig'
         return 1 << self[4]
 
-    def sharps(self):
-        assert self.type() == 'key_signature'
+    def key_sig_sharps(self):
+        assert self.type() == 'key_sig'
         r = self[3]
         if r & 0x80: r -= 0x100
         return r
 
-    def minor(self):
-        assert self.type() == 'key_signature'
+    def key_sig_minor(self):
+        assert self.type() == 'key_sig'
         return self[4]
 
     def meta_type(self):
@@ -136,8 +136,8 @@ class Msg:
                 0x2f: 'end_of_track',
                 0x51: 'tempo',
                 0x54: 'smpte_offset',
-                0x58: 'time_signature',
-                0x59: 'key_signature',
+                0x58: 'time_sig',
+                0x59: 'key_sig',
                 0x7f: 'sequencer_specific',
             }.get(self.meta_type(), 'unknown')
         return {
