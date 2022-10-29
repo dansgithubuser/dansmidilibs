@@ -143,18 +143,10 @@ class Msg(list):
         }[self.type_nibble()]
 
 class Deltamsg:
-    def __init__(self, *args):
+    def __init__(self, delta, bytes_):
+        self._delta = delta
+        self._msg = Msg(bytes_)
         self._ticks = None
-        if len(args) == 2:
-            if type(args[0]) == int and type(args[1]) == bytes:
-                self._delta = args[0]
-                self._msg = Msg(args[1])
-                return
-            if isinstance(args[0], Deltamsg) and type(args[1]) == int:
-                self._delta = args[1]
-                self._msg = args[0].msg()
-                return
-        raise Exception(f'invalid args: {args}')
 
     def __repr__(self):
         return '{}; {}'.format(
@@ -254,7 +246,7 @@ class Track(list):
         for deltamsg in self:
             delta += deltamsg.delta()
             if deltamsg.msg().type() in types:
-                result.append(Deltamsg(deltamsg, delta))
+                result.append(Deltamsg(delta, deltamsg.msg()))
                 delta = 0
         return result
 
@@ -352,7 +344,7 @@ class TrackIter:
             deltamsg = self.track[self.i]
             self.i += 1
             self.ticks_last += deltamsg.delta()
-            if interleave: return Deltamsg(deltamsg, delta)
+            if interleave: return Deltamsg(delta, deltamsg.msg())
             return deltamsg
 
 def interleave(*tracks):
@@ -367,7 +359,7 @@ def interleave(*tracks):
                     first = False
                     result.append(i)
                 else:
-                    result.append(Deltamsg(i, 0))
+                    result.append(Deltamsg(0, i.msg()))
     return result
 
 def print_vertical(*tracks):
