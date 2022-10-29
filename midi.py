@@ -2,21 +2,6 @@ import math
 
 _track_header_size = 8
 
-def _big_endian_to_unsigned(big_endian_bytes):
-    result = 0
-    for byte in big_endian_bytes:
-        result <<= 8
-        result += byte
-    return result
-
-def _to_big_endian(unsigned, size):
-    def extract_byte(unsigned, i):
-        return unsigned >> i * 8 & 0xff
-    return bytes([
-        extract_byte(unsigned, size - 1 - i)
-        for i in range(size)
-    ])
-
 def _chunkitize(file_bytes):
     header_length = 14
     header_title = b'MThd'
@@ -30,20 +15,20 @@ def _chunkitize(file_bytes):
     while len(file_bytes) >= index + _track_header_size:
         if file_bytes[index:index+len(track_title)] != track_title:
             raise Exception('bad track header')
-        track_size = _big_endian_to_unsigned(file_bytes[index+4:index+8])
+        track_size = int.from_bytes(file_bytes[index+4:index+8], 'big')
         if len(file_bytes) < index + _track_header_size + track_size:
             raise Exception('track too long')
         chunks.append(file_bytes[index:index+_track_header_size+track_size])
         index += _track_header_size + track_size
     if index != len(file_bytes): raise Exception('malformed tracks')
-    if _big_endian_to_unsigned(file_bytes[10:12]) != len(chunks) - 1:
+    if int.from_bytes(file_bytes[10:12], 'big') != len(chunks) - 1:
         raise Exception('bad size')
     return chunks
 
 def _write_track(file, track_bytes):
     if track_bytes[-4:] != [0x01, 0xff, 0x2f, 0x00]:
         track_bytes += [0x01, 0xff, 0x2f, 0x00]
-    track_header = b'MTrk' + _to_big_endian(len(track_bytes), 4)
+    track_header = b'MTrk' + len(track_bytes).to_bytes(4, 'big')
     file.write(track_header + bytes(track_bytes))
 
 class Msg(list):
@@ -102,7 +87,7 @@ class Msg(list):
 
     def us_per_quarter(self):
         assert self.type() == 'tempo'
-        return _big_endian_to_unsigned(self[3:6])
+        return int.from_bytes(self[3:6], 'big')
 
     def top(self):
         assert self.type() == 'time_signature'
@@ -291,8 +276,8 @@ class Song:
             header = (
                 b'MThd'
                 + bytes([0, 0, 0, 6, 0, 1])
-                + _to_big_endian(len(self.tracks()), 2)
-                + _to_big_endian(self.ticks_per_quarter(), 2)
+                + len(self.tracks()).to_bytes(2, 'big')
+                + self.ticks_per_quarter().to_bytes(2, 'big')
             )
             file.write(header)
             for track in self.tracks():
@@ -312,10 +297,10 @@ class Song:
         else:
             raise Exception('must specify file')
         chunks = _chunkitize(file_bytes)
-        self._ticks_per_quarter = _big_endian_to_unsigned(chunks[0][12:14])
-        if _big_endian_to_unsigned(chunks[0][8:10]) != 1:
+        self._ticks_per_quarter = int.from_bytes(chunks[0][12:14], 'big')
+        if int.from_bytes(chunks[0][8:10], 'big') != 1:
             raise Exception('unhandled file type')
-        if _big_endian_to_unsigned(chunks[0][10:12]) != len(chunks) - 1:
+        if int.from_bytes(chunks[0][10:12], 'big') != len(chunks) - 1:
             raise Exception('wrong number of tracks')
         self._tracks = [
             Track(Deltamsg._list_from_chunk(chunk))
