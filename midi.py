@@ -143,23 +143,21 @@ class Msg(list):
         }[self.type_nibble()]
 
 class Deltamsg:
-    def __init__(self, delta, bytes_):
-        self._delta = delta
-        self._msg = Msg(bytes_)
-        self._ticks = None
+    def __init__(self, delta, bytes_, ticks=None, note_end=None):
+        self.delta = delta
+        self.msg = Msg(bytes_)
+        self.ticks = ticks
+        self.note_end = note_end
 
     def __repr__(self):
         return '{}; {}'.format(
-            self.delta(),
-            self.msg(),
+            self.delta,
+            self.msg,
         )
-
-    def delta(self):
-        return self._delta
 
     def delta_bytes(self):
         result = []
-        delta = self.delta()
+        delta = self.delta
         for i in range(4):
             byte = delta & 0x7f
             delta >>= 7
@@ -169,17 +167,11 @@ class Deltamsg:
                 return result
         raise Exception('delta too big')
 
-    def msg(self):
-        return self._msg
-
     def msg_bytes(self):
-        return bytes(self._msg)
-
-    def ticks(self):
-        return self._ticks
+        return bytes(self.msg)
 
     def duration(self):
-        return self._note_end._ticks
+        return self.note_end.ticks - self.ticks
 
     def _list_from_chunk(chunk):
         result = []
@@ -190,16 +182,16 @@ class Deltamsg:
             deltamsg, index, running_status = Deltamsg._from_chunk(
                 chunk, index, running_status
             )
-            ticks += deltamsg.delta()
-            deltamsg._ticks = ticks
+            ticks += deltamsg.delta
+            deltamsg.ticks = ticks
             result.append(deltamsg)
-        if result[-1].msg() != [0xff, 0x2f, 0x00]:
+        if result[-1].msg != [0xff, 0x2f, 0x00]:
             raise Exception('invalid last msg')
         for i, v in enumerate(result):
-            if v.msg().type() != 'note_on': continue
+            if v.msg.type() != 'note_on': continue
             for u in result[i+1:]:
-                if u.msg().is_note_end() and u.msg().note() == v.msg().note():
-                    v._note_end = u
+                if u.msg.is_note_end() and u.msg.note() == v.msg.note():
+                    v.note_end = u
                     break
         return result
 
@@ -244,16 +236,16 @@ class Track(list):
         result = Track()
         delta = 0
         for deltamsg in self:
-            delta += deltamsg.delta()
-            if deltamsg.msg().type() in types:
-                result.append(Deltamsg(delta, deltamsg.msg()))
+            delta += deltamsg.delta
+            if deltamsg.msg.type() in types:
+                result.append(Deltamsg(delta, deltamsg.msg))
                 delta = 0
         return result
 
     def msg_set(self):
         result = set()
         for deltamsg in self:
-            result.add(tuple(deltamsg.msg()))
+            result.add(tuple(deltamsg.msg))
         return result
 
 class Song:
@@ -331,7 +323,7 @@ class TrackIter:
     def delta(self):
         if self.i >= len(self.track): return math.inf
         result = (
-            self.track[self.i].delta()
+            self.track[self.i].delta
             - (self.ticks_curr - self.ticks_last)
         )
         if result < 0:
@@ -340,18 +332,18 @@ class TrackIter:
 
     def advance(self, delta, interleave=False):
         self.ticks_curr += delta
-        if not self.delta():
+        if not self.delta:
             deltamsg = self.track[self.i]
             self.i += 1
-            self.ticks_last += deltamsg.delta()
-            if interleave: return Deltamsg(delta, deltamsg.msg())
+            self.ticks_last += deltamsg.delta
+            if interleave: return Deltamsg(delta, deltamsg.msg)
             return deltamsg
 
 def interleave(*tracks):
     result = Track()
     iters = [TrackIter(i) for i in tracks]
     while any(i.more() for i in iters):
-        delta = min(i.delta() for i in iters)
+        delta = min(i.delta for i in iters)
         first = True
         for i in [i.advance(delta, True) for i in iters]:
             if i:
@@ -359,14 +351,14 @@ def interleave(*tracks):
                     first = False
                     result.append(i)
                 else:
-                    result.append(Deltamsg(0, i.msg()))
+                    result.append(Deltamsg(0, i.msg))
     return result
 
 def print_vertical(*tracks):
     iters = [TrackIter(i) for i in tracks]
     ticks = 0
     while any(i.more() for i in iters):
-        delta = min(i.delta() for i in iters)
+        delta = min(i.delta for i in iters)
         ticks += delta
         print(f'{ticks:>10}', end='')
         for i in [i.advance(delta) for i in iters]:
