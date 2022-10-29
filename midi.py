@@ -31,14 +31,23 @@ def _write_track(file, track_bytes):
     track_header = b'MTrk' + len(track_bytes).to_bytes(4, 'big')
     file.write(track_header + bytes(track_bytes))
 
-class Msg(list):
+class Msg:
     def pitch_bend_range(semitones=2, cents=0):
-        return [Msg(i) for i in [
-            [0xb0, 0x65, 0],
-            [0xb0, 0x64, 0],
-            [0xb0, 0x06, semitones],
-            [0xb0, 0x26, cents],
-        ]]
+        return [
+            Msg(0xb0, 0x65, 0),
+            Msg(0xb0, 0x64, 0),
+            Msg(0xb0, 0x06, semitones),
+            Msg(0xb0, 0x26, cents),
+        ]
+
+    def __init__(self, *bytes_):
+        self.bytes = bytes_
+
+    def __eq__(self, other):
+        return self.bytes == other.bytes
+
+    def __iter__(self):
+        return (i for i in self.bytes)
 
     def __repr__(self):
         if self.type_nibble() in [0x80, 0x90]:
@@ -142,10 +151,10 @@ class Msg(list):
             0xf0: 'system',
         }[self.type_nibble()]
 
-class Deltamsg:
+class Deltamsg(Msg):
     def __init__(self, delta, bytes_, ticks=None, note_end=None):
         self.delta = delta
-        self.msg = Msg(bytes_)
+        Msg.__init__(self, *bytes_)
         self.ticks = ticks
         self.note_end = note_end
 
@@ -168,7 +177,7 @@ class Deltamsg:
         raise Exception('delta too big')
 
     def msg_bytes(self):
-        return bytes(self.msg)
+        return bytes(self.bytes)
 
     def duration(self):
         return self.note_end.ticks - self.ticks
@@ -185,12 +194,12 @@ class Deltamsg:
             ticks += deltamsg.delta
             deltamsg.ticks = ticks
             result.append(deltamsg)
-        if result[-1].msg != [0xff, 0x2f, 0x00]:
+        if result[-1].msg != Msg(0xff, 0x2f, 0x00):
             raise Exception('invalid last msg')
         for i, v in enumerate(result):
-            if v.msg.type() != 'note_on': continue
+            if v.type() != 'note_on': continue
             for u in result[i+1:]:
-                if u.msg.is_note_end() and u.msg.note() == v.msg.note():
+                if u.is_note_end() and u.note() == v.note():
                     v.note_end = u
                     break
         return result
@@ -237,7 +246,7 @@ class Track(list):
         delta = 0
         for deltamsg in self:
             delta += deltamsg.delta
-            if deltamsg.msg.type() in types:
+            if deltamsg.type() in types:
                 result.append(Deltamsg(delta, deltamsg.msg))
                 delta = 0
         return result
