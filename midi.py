@@ -240,8 +240,52 @@ class Deltamsg(Msg):
         deltamsg = Deltamsg(delta, bytes([status]) + data)
         return deltamsg, index, running_status
 
-class Track(list):
-    def extract(self, types):
+    def _track_order(self):
+        return [self.ticks, *self.bytes]
+
+class Track:
+    def __init__(self, deltamsgs=[]):
+        self.deltamsgs = deltamsgs
+
+    def append(self, deltamsg):
+        if deltamsg.ticks == None:
+            if self.deltamsgs:
+                deltamsg.ticks = self.deltamsgs[-1].ticks + deltamsg.delta
+            else:
+                deltamsg.ticks = deltamsg.delta
+        self.deltamsgs.append(deltamsg)
+
+    def redelta(self, i):
+        if i == 0:
+            ticks = 0
+        else:
+            ticks = self.deltamsgs[i-1].ticks
+        deltamsg = self.deltamsgs[i]
+        deltamsg.delta = deltamsg.ticks - ticks
+
+    def insert(self, msg, ticks):
+        if not self.deltamsgs: self.append(Deltamsg(msg, ticks, ticks))
+        lo = 0
+        hi = len(self.deltamsgs) - 1
+        deltamsg = Deltamsg(msg, None, ticks)
+        while True:
+            mid = (lo + hi) // 2
+            other = self.deltamsgs[mid]
+            if deltamsg._track_order() == other._track_order():
+                i = mid
+                break
+            if deltamsg._track_order() < other._track_order():
+                hi = mid
+            else:
+                lo = mid
+            if hi - lo == 1:
+                i = hi
+                break
+        self.deltamsgs.insert(i, deltamsg)
+        self.redelta(i)
+        self.redelta(i+1)
+
+    def filter(self, types):
         result = Track()
         delta = 0
         for deltamsg in self:
@@ -249,12 +293,6 @@ class Track(list):
             if deltamsg.type() in types:
                 result.append(Deltamsg(delta, deltamsg.msg))
                 delta = 0
-        return result
-
-    def msg_set(self):
-        result = set()
-        for deltamsg in self:
-            result.add(tuple(deltamsg.msg))
         return result
 
 class Song:
