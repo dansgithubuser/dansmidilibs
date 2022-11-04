@@ -1,7 +1,5 @@
 import math
 
-_track_header_size = 8
-
 class Msg:
     def pitch_bend_range(semitones=2, cents=0):
         return [
@@ -153,64 +151,6 @@ class Deltamsg(Msg):
     def duration(self):
         return self.note_end.ticks - self.ticks
 
-    def _list_from_chunk(chunk):
-        result = []
-        index = _track_header_size
-        running_status = None
-        ticks = 0
-        while index < len(chunk):
-            deltamsg, index, running_status = Deltamsg._from_chunk(
-                chunk, index, running_status
-            )
-            ticks += deltamsg.delta
-            deltamsg.ticks = ticks
-            result.append(deltamsg)
-        if result[-1].msg != Msg(0xff, 0x2f, 0x00):
-            raise Exception('invalid last msg')
-        for i, v in enumerate(result):
-            if v.type() != 'note_on': continue
-            for u in result[i+1:]:
-                if u.is_note_end() and u.note() == v.note():
-                    v.note_end = u
-                    break
-        return result
-
-    def _from_chunk(chunk, index, running_status):
-        # delta
-        delta = 0
-        for i in range(index, index+4):
-            delta <<= 7
-            delta += chunk[i] & 0x7f
-            if not chunk[i] & 0x80: break
-        else: raise Exception('delta too big')
-        index = i+1
-        # msg - status
-        if chunk[index] & 0x80:
-            status = chunk[index]
-            if chunk[index] & 0xf0 != 0xf0:
-                running_status = status
-            index += 1
-        else:
-            if not running_status: raise Exception('no status')
-            status = running_status
-        # msg - data
-        if status & 0xf0 in [0x80, 0x90, 0xa0, 0xb0, 0xe0]:
-            data = chunk[index:index+2]
-            index += 2
-        elif status & 0xf0 in [0xc0, 0xd0]:
-            data = chunk[index:index+1]
-            index += 1
-        elif status & 0xf0 == 0xf0:
-            if status == 0xff:
-                data_size = 2 + chunk[index+1]
-                data = chunk[index:index+data_size]
-                index += data_size
-            else:
-                data = []
-        # result
-        deltamsg = Deltamsg(delta, bytes([status]) + data)
-        return deltamsg, index, running_status
-
     def _track_order(self):
         return [self.ticks, *self.bytes]
 
@@ -309,29 +249,76 @@ class Song:
         if file_bytes[0:len(header_title)] != header_title:
             raise(Exception(f'header title should be {header_title}, but got {file_bytes[0:len(header_title)]}'))
         chunks = [file_bytes[:header_length]]
+        track_header_size = 8
         track_title = b'MTrk'
         index = header_length
-        while len(file_bytes) >= index + _track_header_size:
+        while len(file_bytes) >= index + track_header_size:
             if file_bytes[index:index+len(track_title)] != track_title:
                 raise Exception('bad track header')
             track_size = int.from_bytes(file_bytes[index+4:index+8], 'big')
-            if len(file_bytes) < index + _track_header_size + track_size:
+            if len(file_bytes) < index + track_header_size + track_size:
                 raise Exception('track too long')
-            chunks.append(file_bytes[index:index+_track_header_size+track_size])
-            index += _track_header_size + track_size
+            chunks.append(file_bytes[index:index+track_header_size+track_size])
+            index += track_header_size + track_size
         if index != len(file_bytes): raise Exception('malformed tracks')
         if int.from_bytes(file_bytes[10:12], 'big') != len(chunks) - 1:
             raise Exception('bad size')
-        # handle each chunk
+        # handle chunk 0
         self.ticks_per_quarter = int.from_bytes(chunks[0][12:14], 'big')
         if int.from_bytes(chunks[0][8:10], 'big') != 1:
             raise Exception('unhandled file type')
         if int.from_bytes(chunks[0][10:12], 'big') != len(chunks) - 1:
             raise Exception('wrong number of tracks')
-        self.tracks = [
-            Track(Deltamsg._list_from_chunk(chunk))
-            for chunk in chunks[1:]
-        ]
+        # turn other chunks into a tracks
+        self.tracks.clear()
+        for chunk in chunks[1:]:
+            track = Track()
+            index = _track_header_size
+            running_status = None
+            while index < len(chunk):
+                # delta
+                delta = 0
+                for i in range(index, index+4):
+                    delta <<= 7
+                    delta += chunk[i] & 0x7f
+                    if not chunk[i] & 0x80: break
+                else: raise Exception('delta too big')
+                index = i+1
+                # msg - status
+                if chunk[index] & 0x80:
+                    status = chunk[index]
+                    if chunk[index] & 0xf0 != 0xf0:
+                        running_status = status
+                    index += 1
+                else:
+                    if not running_status: raise Exception('no status')
+                    status = running_status
+                # msg - data
+                if status & 0xf0 in [0x80, 0x90, 0xa0, 0xb0, 0xe0]:
+                    data = chunk[index:index+2]
+                    index += 2
+                elif status & 0xf0 in [0xc0, 0xd0]:
+                    data = chunk[index:index+1]
+                    index += 1
+                elif status & 0xf0 == 0xf0:
+                    if status == 0xff:
+                        data_size = 2 + chunk[index+1]
+                        data = chunk[index:index+data_size]
+                        index += data_size
+                    else:
+                        data = []
+                # deltamsg
+                deltamsg = Deltamsg(delta, bytes([status]) + data)
+                track.append(deltamsg)
+            if track[-1].msg != Msg(0xff, 0x2f, 0x00):
+                raise Exception('invalid last msg')
+            for i, v in enumerate(track):
+                if v.type() != 'note_on': continue
+                for u in track[i+1:]:
+                    if u.is_note_end() and u.note() == v.note():
+                        v.note_end = u
+                        break
+            self.tracks.append(track)
         return self
 
     def filterleave(self, types):
