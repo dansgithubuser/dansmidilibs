@@ -1,59 +1,22 @@
 import math
 
-_track_header_size = 8
-
-def _big_endian_to_unsigned(big_endian_bytes):
-    result = 0
-    for byte in big_endian_bytes:
-        result <<= 8
-        result += byte
-    return result
-
-def _to_big_endian(unsigned, size):
-    def extract_byte(unsigned, i):
-        return unsigned >> i * 8 & 0xff
-    return bytes([
-        extract_byte(unsigned, size - 1 - i)
-        for i in range(size)
-    ])
-
-def _chunkitize(file_bytes):
-    header_length = 14
-    header_title = b'MThd'
-    if len(file_bytes) < header_length:
-        raise Exception('header too short')
-    if file_bytes[0:len(header_title)] != header_title:
-        raise(Exception(f'header title should be {header_title}, but got {file_bytes[0:len(header_title)]}'))
-    chunks = [file_bytes[:header_length]]
-    track_title = b'MTrk'
-    index = header_length
-    while len(file_bytes) >= index + _track_header_size:
-        if file_bytes[index:index+len(track_title)] != track_title:
-            raise Exception('bad track header')
-        track_size = _big_endian_to_unsigned(file_bytes[index+4:index+8])
-        if len(file_bytes) < index + _track_header_size + track_size:
-            raise Exception('track too long')
-        chunks.append(file_bytes[index:index+_track_header_size+track_size])
-        index += _track_header_size + track_size
-    if index != len(file_bytes): raise Exception('malformed tracks')
-    if _big_endian_to_unsigned(file_bytes[10:12]) != len(chunks) - 1:
-        raise Exception('bad size')
-    return chunks
-
-def _write_track(file, track_bytes):
-    if track_bytes[-4:] != [0x01, 0xff, 0x2f, 0x00]:
-        track_bytes += [0x01, 0xff, 0x2f, 0x00]
-    track_header = b'MTrk' + _to_big_endian(len(track_bytes), 4)
-    file.write(track_header + bytes(track_bytes))
-
-class Msg(list):
+class Msg:
     def pitch_bend_range(semitones=2, cents=0):
-        return [Msg(i) for i in [
-            [0xb0, 0x65, 0],
-            [0xb0, 0x64, 0],
-            [0xb0, 0x06, semitones],
-            [0xb0, 0x26, cents],
-        ]]
+        return [
+            Msg(0xb0, 0x65, 0),
+            Msg(0xb0, 0x64, 0),
+            Msg(0xb0, 0x06, semitones),
+            Msg(0xb0, 0x26, cents),
+        ]
+
+    def __init__(self, *bytes_):
+        self.bytes = bytes_
+
+    def __eq__(self, other):
+        return self.bytes == other.bytes
+
+    def __iter__(self):
+        return (i for i in self.bytes)
 
     def __repr__(self):
         if self.type_nibble() in [0x80, 0x90]:
@@ -100,26 +63,26 @@ class Msg(list):
         if self.type_nibble() == 0x90 and self[2] == 0: return True
         return False
 
-    def us_per_quarter(self):
+    def tempo_us_per_quarter(self):
         assert self.type() == 'tempo'
-        return _big_endian_to_unsigned(self[3:6])
+        return int.from_bytes(self[3:6], 'big')
 
-    def top(self):
-        assert self.type() == 'time_signature'
+    def time_sig_top(self):
+        assert self.type() == 'time_sig'
         return self[3]
 
-    def bottom(self):
-        assert self.type() == 'time_signature'
+    def time_sig_bottom(self):
+        assert self.type() == 'time_sig'
         return 1 << self[4]
 
-    def sharps(self):
-        assert self.type() == 'key_signature'
+    def key_sig_sharps(self):
+        assert self.type() == 'key_sig'
         r = self[3]
         if r & 0x80: r -= 0x100
         return r
 
-    def minor(self):
-        assert self.type() == 'key_signature'
+    def key_sig_minor(self):
+        assert self.type() == 'key_sig'
         return self[4]
 
     def meta_type(self):
@@ -142,8 +105,8 @@ class Msg(list):
                 0x2f: 'end_of_track',
                 0x51: 'tempo',
                 0x54: 'smpte_offset',
-                0x58: 'time_signature',
-                0x59: 'key_signature',
+                0x58: 'time_sig',
+                0x59: 'key_sig',
                 0x7f: 'sequencer_specific',
             }.get(self.meta_type(), 'unknown')
         return {
@@ -157,32 +120,22 @@ class Msg(list):
             0xf0: 'system',
         }[self.type_nibble()]
 
-class Deltamsg:
-    def __init__(self, *args):
-        self._ticks = None
-        if len(args) == 2:
-            if type(args[0]) == int and type(args[1]) == bytes:
-                self._delta = args[0]
-                self._msg = Msg(args[1])
-                return
-            if isinstance(args[0], Deltamsg) and type(args[1]) == int:
-                self._delta = args[1]
-                self._msg = args[0].msg()
-                return
-        raise Exception(f'invalid args: {args}')
+class Deltamsg(Msg):
+    def __init__(self, delta, bytes_, ticks=None, note_end=None):
+        self.delta = delta
+        Msg.__init__(self, *bytes_)
+        self.ticks = ticks
+        self.note_end = note_end
 
     def __repr__(self):
         return '{}; {}'.format(
-            self.delta(),
-            self.msg(),
+            self.delta,
+            self.msg,
         )
-
-    def delta(self):
-        return self._delta
 
     def delta_bytes(self):
         result = []
-        delta = self.delta()
+        delta = self.delta
         for i in range(4):
             byte = delta & 0x7f
             delta >>= 7
@@ -192,98 +145,73 @@ class Deltamsg:
                 return result
         raise Exception('delta too big')
 
-    def msg(self):
-        return self._msg
-
     def msg_bytes(self):
-        return bytes(self._msg)
-
-    def ticks(self):
-        return self._ticks
+        return bytes(self.bytes)
 
     def duration(self):
-        return self._note_end._ticks
+        return self.note_end.ticks - self.ticks
 
-    def _list_from_chunk(chunk):
-        result = []
-        index = _track_header_size
-        running_status = None
-        ticks = 0
-        while index < len(chunk):
-            deltamsg, index, running_status = Deltamsg._from_chunk(
-                chunk, index, running_status
-            )
-            ticks += deltamsg.delta()
-            deltamsg._ticks = ticks
-            result.append(deltamsg)
-        if result[-1].msg() != [0xff, 0x2f, 0x00]:
-            raise Exception('invalid last msg')
-        for i, v in enumerate(result):
-            if v.msg().type() != 'note_on': continue
-            for u in result[i+1:]:
-                if u.msg().is_note_end() and u.msg().note() == v.msg().note():
-                    v._note_end = u
-                    break
-        return result
+    def _track_order(self):
+        return [self.ticks, *self.bytes]
 
-    def _from_chunk(chunk, index, running_status):
-        # delta
-        delta = 0
-        for i in range(index, index+4):
-            delta <<= 7
-            delta += chunk[i] & 0x7f
-            if not chunk[i] & 0x80: break
-        else: raise Exception('delta too big')
-        index = i+1
-        # msg - status
-        if chunk[index] & 0x80:
-            status = chunk[index]
-            if chunk[index] & 0xf0 != 0xf0:
-                running_status = status
-            index += 1
-        else:
-            if not running_status: raise Exception('no status')
-            status = running_status
-        # msg - data
-        if status & 0xf0 in [0x80, 0x90, 0xa0, 0xb0, 0xe0]:
-            data = chunk[index:index+2]
-            index += 2
-        elif status & 0xf0 in [0xc0, 0xd0]:
-            data = chunk[index:index+1]
-            index += 1
-        elif status & 0xf0 == 0xf0:
-            if status == 0xff:
-                data_size = 2 + chunk[index+1]
-                data = chunk[index:index+data_size]
-                index += data_size
+class Track:
+    def __init__(self, deltamsgs=[]):
+        self.deltamsgs = deltamsgs
+
+    def append(self, deltamsg):
+        if deltamsg.ticks == None:
+            if self.deltamsgs:
+                deltamsg.ticks = self.deltamsgs[-1].ticks + deltamsg.delta
             else:
-                data = []
-        # result
-        deltamsg = Deltamsg(delta, bytes([status]) + data)
-        return deltamsg, index, running_status
+                deltamsg.ticks = deltamsg.delta
+        self.deltamsgs.append(deltamsg)
 
-class Track(list):
-    def extract(self, types):
+    def redelta(self, i):
+        'Recalculate deltamsgs[i].delta assuming ticks are correct.'
+        if i == 0:
+            ticks = 0
+        else:
+            ticks = self.deltamsgs[i-1].ticks
+        deltamsg = self.deltamsgs[i]
+        deltamsg.delta = deltamsg.ticks - ticks
+
+    def insert(self, msg, ticks):
+        if not self.deltamsgs: self.append(Deltamsg(msg, ticks, ticks))
+        lo = 0
+        hi = len(self.deltamsgs) - 1
+        deltamsg = Deltamsg(msg, None, ticks)
+        while True:
+            mid = (lo + hi) // 2
+            other = self.deltamsgs[mid]
+            if deltamsg._track_order() == other._track_order():
+                i = mid
+                break
+            if deltamsg._track_order() < other._track_order():
+                hi = mid
+            else:
+                lo = mid
+            if hi - lo == 1:
+                i = hi
+                break
+        self.deltamsgs.insert(i, deltamsg)
+        self.redelta(i)
+        self.redelta(i+1)
+
+    def filter(self, types):
         result = Track()
         delta = 0
         for deltamsg in self:
-            delta += deltamsg.delta()
-            if deltamsg.msg().type() in types:
-                result.append(Deltamsg(deltamsg, delta))
+            delta += deltamsg.delta
+            if deltamsg.type() in types:
+                result.append(Deltamsg(delta, deltamsg.msg))
                 delta = 0
-        return result
-
-    def msg_set(self):
-        result = set()
-        for deltamsg in self:
-            result.add(tuple(deltamsg.msg()))
         return result
 
 class Song:
     def __init__(self, file_path=None, file_bytes=None, ticks_per_quarter=360):
-        self._ticks_per_quarter = ticks_per_quarter
-        self._tracks = []
-        if file_path != None or file_bytes != None:
+        self.ticks_per_quarter = ticks_per_quarter
+        self.tracks = []
+        if file_path or file_bytes:
             self.load(file_path, file_bytes)
 
     def save(self, file_path):
@@ -291,19 +219,22 @@ class Song:
             header = (
                 b'MThd'
                 + bytes([0, 0, 0, 6, 0, 1])
-                + _to_big_endian(len(self.tracks()), 2)
-                + _to_big_endian(self.ticks_per_quarter(), 2)
+                + len(self.tracks).to_bytes(2, 'big')
+                + self.ticks_per_quarter.to_bytes(2, 'big')
             )
             file.write(header)
-            for track in self.tracks():
+            for track in self.tracks:
                 track_bytes = []
                 for deltamsg in track:
                     track_bytes.extend(deltamsg.delta_bytes())
                     track_bytes.extend(deltamsg.msg_bytes())
-                _write_track(file, track_bytes)
+                if track_bytes[-4:] != [0x01, 0xff, 0x2f, 0x00]:
+                    track_bytes += [0x01, 0xff, 0x2f, 0x00]
+                track_header = b'MTrk' + len(track_bytes).to_bytes(4, 'big')
+                file.write(track_header + bytes(track_bytes))
 
     def load(self, file_path=None, file_bytes=None):
-        if sum({True: 1, False: 0}[i != None] for i in [file_path, file_bytes]) > 1:
+        if file_path and file_bytes:
             raise Exception('cannot specify file more than one way')
         if file_path:
             with open(file_path, 'rb') as file: file_bytes = file.read()
@@ -311,50 +242,107 @@ class Song:
             file_bytes = bytes(file_bytes)
         else:
             raise Exception('must specify file')
-        chunks = _chunkitize(file_bytes)
-        self._ticks_per_quarter = _big_endian_to_unsigned(chunks[0][12:14])
-        if _big_endian_to_unsigned(chunks[0][8:10]) != 1:
+        # get chunks
+        header_length = 14
+        header_title = b'MThd'
+        if len(file_bytes) < header_length:
+            raise Exception('header too short')
+        if file_bytes[0:len(header_title)] != header_title:
+            raise(Exception(f'header title should be {header_title}, but got {file_bytes[0:len(header_title)]}'))
+        chunks = [file_bytes[:header_length]]
+        track_header_size = 8
+        track_title = b'MTrk'
+        index = header_length
+        while len(file_bytes) >= index + track_header_size:
+            if file_bytes[index:index+len(track_title)] != track_title:
+                raise Exception('bad track header')
+            track_size = int.from_bytes(file_bytes[index+4:index+8], 'big')
+            if len(file_bytes) < index + track_header_size + track_size:
+                raise Exception('track too long')
+            chunks.append(file_bytes[index:index+track_header_size+track_size])
+            index += track_header_size + track_size
+        if index != len(file_bytes): raise Exception('malformed tracks')
+        if int.from_bytes(file_bytes[10:12], 'big') != len(chunks) - 1:
+            raise Exception('bad size')
+        # handle chunk 0
+        self.ticks_per_quarter = int.from_bytes(chunks[0][12:14], 'big')
+        if int.from_bytes(chunks[0][8:10], 'big') != 1:
             raise Exception('unhandled file type')
-        if _big_endian_to_unsigned(chunks[0][10:12]) != len(chunks) - 1:
+        if int.from_bytes(chunks[0][10:12], 'big') != len(chunks) - 1:
             raise Exception('wrong number of tracks')
-        self._tracks = [
-            Track(Deltamsg._list_from_chunk(chunk))
-            for chunk in chunks[1:]
-        ]
+        # turn other chunks into a tracks
+        self.tracks.clear()
+        for chunk in chunks[1:]:
+            track = Track()
+            index = _track_header_size
+            running_status = None
+            while index < len(chunk):
+                # delta
+                delta = 0
+                for i in range(index, index+4):
+                    delta <<= 7
+                    delta += chunk[i] & 0x7f
+                    if not chunk[i] & 0x80: break
+                else: raise Exception('delta too big')
+                index = i+1
+                # msg - status
+                if chunk[index] & 0x80:
+                    status = chunk[index]
+                    if chunk[index] & 0xf0 != 0xf0:
+                        running_status = status
+                    index += 1
+                else:
+                    if not running_status: raise Exception('no status')
+                    status = running_status
+                # msg - data
+                if status & 0xf0 in [0x80, 0x90, 0xa0, 0xb0, 0xe0]:
+                    data = chunk[index:index+2]
+                    index += 2
+                elif status & 0xf0 in [0xc0, 0xd0]:
+                    data = chunk[index:index+1]
+                    index += 1
+                elif status & 0xf0 == 0xf0:
+                    if status == 0xff:
+                        data_size = 2 + chunk[index+1]
+                        data = chunk[index:index+data_size]
+                        index += data_size
+                    else:
+                        data = []
+                # deltamsg
+                deltamsg = Deltamsg(delta, bytes([status]) + data)
+                track.append(deltamsg)
+            if track[-1].msg != Msg(0xff, 0x2f, 0x00):
+                raise Exception('invalid last msg')
+            for i, v in enumerate(track):
+                if v.type() != 'note_on': continue
+                for u in track[i+1:]:
+                    if u.is_note_end() and u.note() == v.note():
+                        v.note_end = u
+                        break
+            self.tracks.append(track)
         return self
 
-    def tracks(self, track=None):
-        if track == None:
-            return self._tracks
-        else:
-            return self._tracks[track]
-
-    def track(self, i):
-        return self._tracks[i]
-
-    def ticks_per_quarter(self):
-        return self._ticks_per_quarter
-
-    def collect(self, types):
-        result = []
-        for i in range(len(self.tracks())):
-            result = interleave(result, self.tracks(i).extract(types))
-        return result
+    def filterleave(self, types):
+        'Filter each track for specified types, then interleave them. Useful to get all events of a specific type into one track.'
+        return interleave(i.filter(types) for i in self.tracks)
 
 class TrackIter:
+    'Track iterator that makes it easier to coordinate iteration over multiple tracks.'
+
     def __init__(self, track):
         self.track = track
         self.i = 0
         self.ticks_last = 0
         self.ticks_curr = 0
 
-    def more(self):
-        return self.i < len(self.track)
+    def stopped(self):
+        return self.i >= len(self.track)
 
     def delta(self):
-        if self.i >= len(self.track): return math.inf
+        "Returns the delta to the next msg in the track, or infinity if there's no next msg."
+        if self.stopped(): return math.inf
         result = (
-            self.track[self.i].delta()
+            self.track[self.i].delta
             - (self.ticks_curr - self.ticks_last)
         )
         if result < 0:
@@ -362,39 +350,44 @@ class TrackIter:
         return result
 
     def advance(self, delta, interleave=False):
+        "Advance by specified delta and return a deltamsg if we've come to one. If interleave is true, its delta will be set to the one supplied."
         self.ticks_curr += delta
         if not self.delta():
+            # advance to next msg
             deltamsg = self.track[self.i]
             self.i += 1
-            self.ticks_last += deltamsg.delta()
-            if interleave: return Deltamsg(deltamsg, delta)
+            self.ticks_last += deltamsg.delta
+            if interleave: return Deltamsg(delta, deltamsg.msg)
             return deltamsg
 
 def interleave(*tracks):
+    'Turn many tracks into one.'
     result = Track()
     iters = [TrackIter(i) for i in tracks]
-    while any(i.more() for i in iters):
-        delta = min(i.delta() for i in iters)
+    while not all(i.stopped() for i in iters):
+        delta = min(i.delta for i in iters)
         first = True
-        for i in [i.advance(delta, True) for i in iters]:
-            if i:
+        for j in [i.advance(delta, True) for i in iters]:
+            if deltamsg := j:
                 if first:
+                    # advance by delta
                     first = False
-                    result.append(i)
+                    result.append(deltamsg)
                 else:
-                    result.append(Deltamsg(i, 0))
+                    # these msgs happen at the same time, so zero delta
+                    result.append(Deltamsg(0, deltamsg.msg))
     return result
 
 def print_vertical(*tracks):
     iters = [TrackIter(i) for i in tracks]
     ticks = 0
-    while any(i.more() for i in iters):
-        delta = min(i.delta() for i in iters)
+    while not all(i.stopped() for i in iters):
+        delta = min(i.delta for i in iters)
         ticks += delta
         print(f'{ticks:>10}', end='')
-        for i in [i.advance(delta) for i in iters]:
-            if i:
-                s = repr(i)
+        for j in [i.advance(delta) for i in iters]:
+            if deltamsg := j:
+                s = repr(j)
             else:
                 s = '-'
             print(f'{s:>30}', end='')
