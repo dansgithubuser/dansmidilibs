@@ -167,6 +167,7 @@ class Track:
         self.deltamsgs.append(deltamsg)
 
     def redelta(self, i):
+        'Recalculate deltamsgs[i].delta assuming ticks are correct.'
         if i == 0:
             ticks = 0
         else:
@@ -322,20 +323,24 @@ class Song:
         return self
 
     def filterleave(self, types):
+        'Filter each track for specified types, then interleave them. Useful to get all events of a specific type into one track.'
         return interleave(i.filter(types) for i in self.tracks)
 
 class TrackIter:
+    'Track iterator that makes it easier to coordinate iteration over multiple tracks.'
+
     def __init__(self, track):
         self.track = track
         self.i = 0
         self.ticks_last = 0
         self.ticks_curr = 0
 
-    def more(self):
-        return self.i < len(self.track)
+    def stopped(self):
+        return self.i >= len(self.track)
 
     def delta(self):
-        if self.i >= len(self.track): return math.inf
+        "Returns the delta to the next msg in the track, or infinity if there's no next msg."
+        if self.stopped(): return math.inf
         result = (
             self.track[self.i].delta
             - (self.ticks_curr - self.ticks_last)
@@ -345,8 +350,10 @@ class TrackIter:
         return result
 
     def advance(self, delta, interleave=False):
+        "Advance by specified delta and return a deltamsg if we've come to one. If interleave is true, its delta will be set to the one supplied."
         self.ticks_curr += delta
-        if not self.delta:
+        if not self.delta():
+            # advance to next msg
             deltamsg = self.track[self.i]
             self.i += 1
             self.ticks_last += deltamsg.delta
@@ -354,30 +361,33 @@ class TrackIter:
             return deltamsg
 
 def interleave(*tracks):
+    'Turn many tracks into one.'
     result = Track()
     iters = [TrackIter(i) for i in tracks]
-    while any(i.more() for i in iters):
+    while not all(i.stopped() for i in iters):
         delta = min(i.delta for i in iters)
         first = True
-        for i in [i.advance(delta, True) for i in iters]:
-            if i:
+        for j in [i.advance(delta, True) for i in iters]:
+            if deltamsg := j:
                 if first:
+                    # advance by delta
                     first = False
-                    result.append(i)
+                    result.append(deltamsg)
                 else:
-                    result.append(Deltamsg(0, i.msg))
+                    # these msgs happen at the same time, so zero delta
+                    result.append(Deltamsg(0, deltamsg.msg))
     return result
 
 def print_vertical(*tracks):
     iters = [TrackIter(i) for i in tracks]
     ticks = 0
-    while any(i.more() for i in iters):
+    while not all(i.stopped() for i in iters):
         delta = min(i.delta for i in iters)
         ticks += delta
         print(f'{ticks:>10}', end='')
-        for i in [i.advance(delta) for i in iters]:
-            if i:
-                s = repr(i)
+        for j in [i.advance(delta) for i in iters]:
+            if deltamsg := j:
+                s = repr(j)
             else:
                 s = '-'
             print(f'{s:>30}', end='')
