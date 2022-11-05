@@ -1,12 +1,32 @@
+import bisect
 import math
 
 class Msg:
-    def pitch_bend_range(semitones=2, cents=0):
+    def note_on(num, vel=0x40, channel=0):
+        assert 0 <= num <= 0xff
+        assert 0 <= vel <= 0xff
+        assert 0 <= channel <= 0xf
+        return Msg(0x90 | channel, num, vel)
+
+    def note_off(num, vel=0x40, channel=0):
+        assert 0 <= num <= 0xff
+        assert 0 <= vel <= 0xff
+        assert 0 <= channel <= 0xf
+        return Msg(0x80 | channel, num, vel)
+
+    def tempo(us_per_quarter):
+        assert 0 <= us_per_quarter <= 1 << 24
+        return Msg(0xff, 0x51, 3, us_per_quarter.to_bytes(3, 'big'))
+
+    def pitch_bend_range(semitones=2, cents=0, channel=0):
+        assert 0 <= semitones <= 0xff
+        assert 0 <= cents <= 0xff
+        assert 0 <= channel <= 0xf
         return [
-            Msg(0xb0, 0x65, 0),
-            Msg(0xb0, 0x64, 0),
-            Msg(0xb0, 0x06, semitones),
-            Msg(0xb0, 0x26, cents),
+            Msg(0xb0 | channel, 0x65, 0),
+            Msg(0xb0 | channel, 0x64, 0),
+            Msg(0xb0 | channel, 0x06, semitones),
+            Msg(0xb0 | channel, 0x26, cents),
         ]
 
     def __init__(self, *bytes_):
@@ -29,16 +49,16 @@ class Msg:
             return '{:02x} {} {:02x}'.format(
                 self.status(),
                 note + octave,
-                self.velocity(),
+                self.vel(),
             )
         else:
-            return ' '.join([f'{i:02x}' for i in self])
+            return ' '.join([f'{i:02x}' for i in self.bytes])
 
     def __str__(self):
         return str(list(self))
 
     def status(self):
-        return self[0]
+        return self.bytes[0]
 
     def type_nibble(self):
         return self.status() & 0xf0
@@ -48,47 +68,52 @@ class Msg:
             raise Exception("system messages don't have a channel")
         return self.status() & 0x0f
 
-    def note(self):
-        if self.type_nibble() not in [0x80, 0x90, 0xa0]:
-            raise Exception('no note')
-        return self[1]
+    def vel(self):
+        assert self.has_vel()
+        return self.bytes[2]
 
-    def velocity(self):
-        if self.type_nibble() not in [0x80, 0x90]:
-            raise Exception('no velocity')
-        return self[2]
+    def has_vel(self):
+        return self.type_nibble() in [0x80, 0x90]
+
+    def note(self):
+        assert self.has_note()
+        return self.bytes[1]
+
+    def has_note(self):
+        return self.type_nibble() in [0x80, 0x90, 0xa0]
 
     def is_note_end(self):
+        'Check if this event is a note on with 0 velocity, or a note off.'
         if self.type_nibble() == 0x80: return True
-        if self.type_nibble() == 0x90 and self[2] == 0: return True
+        if self.type_nibble() == 0x90 and self.bytes[2] == 0: return True
         return False
 
     def tempo_us_per_quarter(self):
         assert self.type() == 'tempo'
-        return int.from_bytes(self[3:6], 'big')
+        return int.from_bytes(self.bytes[3:6], 'big')
 
     def time_sig_top(self):
         assert self.type() == 'time_sig'
-        return self[3]
+        return self.bytes[3]
 
     def time_sig_bottom(self):
         assert self.type() == 'time_sig'
-        return 1 << self[4]
+        return 1 << self.bytes[4]
 
     def key_sig_sharps(self):
         assert self.type() == 'key_sig'
-        r = self[3]
+        r = self.bytes[3]
         if r & 0x80: r -= 0x100
         return r
 
     def key_sig_minor(self):
         assert self.type() == 'key_sig'
-        return self[4]
+        return self.bytes[4]
 
     def meta_type(self):
         if self.status() != 0xff:
             raise Exception('not meta')
-        return self[1]
+        return self.bytes[1]
 
     def type(self):
         if self.status() == 0xff:
@@ -120,18 +145,37 @@ class Msg:
             0xf0: 'system',
         }[self.type_nibble()]
 
+    def transpose(self, semitones):
+        assert self.has_note()
+        assert 0 <= self.bytes[1] + semitones <= 0xff
+        self.bytes[1] += semitones
+
+    def set_vel(self, vel):
+        assert self.has_vel()
+        assert 0 <= vel <= 0xff
+        self.bytes[2] = vel
+
 class Deltamsg(Msg):
     def __init__(self, delta, bytes_, ticks=None, note_end=None):
+        'A note end could be a note on with 0 velocity or a note off.'
         self.delta = delta
         Msg.__init__(self, *bytes_)
         self.ticks = ticks
-        self.note_end = note_end
+        if self.note_end:
+            self.set_note_end(note_end)
 
     def __repr__(self):
         return '{}; {}'.format(
             self.delta,
             self.msg,
         )
+
+    def set_note_end(self, note_end):
+        assert note_end().is_note_end()
+        assert self.note() == note_end().note()
+        if self.ticks != None and note_end().ticks:
+            assert self.ticks <= note_end().ticks
+        self.note_end = note_end
 
     def delta_bytes(self):
         result = []
@@ -149,19 +193,35 @@ class Deltamsg(Msg):
         return bytes(self.bytes)
 
     def duration(self):
-        return self.note_end.ticks - self.ticks
+        return self.note_end().ticks - self.ticks
 
-    def _track_order(self):
-        return [self.ticks, *self.bytes]
+    def vel_off(self):
+        return self.note_end().vel()
+
+    def transpose(self, semitones):
+        Msg.transpose(self, semitones)
+        if self.note_end:
+            self.note_end().transpose(semitones)
+
+    def durate(self, ticks):
+        self.note_end.remove()
+        i = self.note_end.track().add(self.note_end(), self.ticks + ticks)
+        self.note_end().renorm(i)
 
 class Track:
     def __init__(self, deltamsgs=[]):
         self.deltamsgs = deltamsgs
 
+    def __getitem__(self, i):
+        return self.deltamsgs[i]
+
+    def __len__(self):
+        return len(self.deltamsgs)
+
     def append(self, deltamsg):
         if deltamsg.ticks == None:
             if self.deltamsgs:
-                deltamsg.ticks = self.deltamsgs[-1].ticks + deltamsg.delta
+                deltamsg.ticks = self[-1].ticks + deltamsg.delta
             else:
                 deltamsg.ticks = deltamsg.delta
         self.deltamsgs.append(deltamsg)
@@ -171,31 +231,26 @@ class Track:
         if i == 0:
             ticks = 0
         else:
-            ticks = self.deltamsgs[i-1].ticks
-        deltamsg = self.deltamsgs[i]
+            ticks = self[i-1].ticks
+        deltamsg = self[i]
         deltamsg.delta = deltamsg.ticks - ticks
 
-    def insert(self, msg, ticks):
+    def add(self, msg, ticks):
         if not self.deltamsgs: self.append(Deltamsg(msg, ticks, ticks))
-        lo = 0
-        hi = len(self.deltamsgs) - 1
         deltamsg = Deltamsg(msg, None, ticks)
-        while True:
-            mid = (lo + hi) // 2
-            other = self.deltamsgs[mid]
-            if deltamsg._track_order() == other._track_order():
-                i = mid
-                break
-            if deltamsg._track_order() < other._track_order():
-                hi = mid
-            else:
-                lo = mid
-            if hi - lo == 1:
-                i = hi
-                break
+        key = lambda i: [i.ticks, *i.bytes]
+        i = bisect.bisect(self.deltamsgs, key(deltamsg), key=key)
         self.deltamsgs.insert(i, deltamsg)
         self.redelta(i)
         self.redelta(i+1)
+        return i
+
+    def find(self, deltamsg_id, ticks):
+        i = bisect.bisect_left(self.deltamsgs, ticks, key=lambda i: i.ticks)
+        while id(self[i]) != deltamsg_id:
+            i += 1
+            if i < 0: return
+        return i
 
     def filter(self, types):
         result = Track()
@@ -208,9 +263,9 @@ class Track:
         return result
 
 class Song:
-    def __init__(self, file_path=None, file_bytes=None, ticks_per_quarter=360):
+    def __init__(self, file_path=None, file_bytes=None, ticks_per_quarter=360, track_count=2):
         self.ticks_per_quarter = ticks_per_quarter
-        self.tracks = []
+        self.tracks = [Track() for i in range(track_count)]
         if file_path or file_bytes:
             self.load(file_path, file_bytes)
 
@@ -324,16 +379,91 @@ class Song:
                 raise Exception('invalid last msg')
             for i, v in enumerate(track):
                 if v.type() != 'note_on': continue
-                for u in track[i+1:]:
+                for j, u in enumerate(track[i+1:]):
                     if u.is_note_end() and u.note() == v.note():
-                        v.note_end = u
+                        v.set_note_end(Ref(self, len(tracks), i+1+j))
                         break
             self.tracks.append(track)
         return self
 
+    def add_note(self, track, ticks, duration, num, channel=None, vel_on=0x40, vel_off=0x40):
+        if channel == None:
+            assert track != 0
+            channel = track - 1
+        on = self.tracks[track].add(Msg.note_on(num, vel_on, channel), ticks)
+        off = self.tracks[track].add(Msg.note_off(num, vel_off, channel), ticks + duration)
+        Ref(self, track, on)().set_note_end(Ref(self, track, off))
+
+    def prev(self, track, ticks, types=None):
+        track = self.tracks[track]
+        i = bisect.bisect_left(track.deltamsgs, ticks, key=lambda i: i.ticks) - 1
+        while True:
+            if i < 0:
+                return
+            if types == None or track[i].type() in types:
+                return Ref(self, track, i)
+            i -= 1
+
+    def select(self, track_i=0, track_f=None, ticks_i=0, ticks_f=math.inf, note_i=None, note_f=None, types=None):
+        if track_f == None:
+            track_f = track_i
+        if note_i != None and note_f == None:
+            note_f = note_i
+        result = []
+        for track_index, track in enumerate(self.tracks[track_i:track_f+1], track_i):
+            i = bisect.bisect_left(track.deltamsgs, ticks_i, key=lambda i: i.ticks)
+            while i < len(track):
+                deltamsg = track[i]
+                deltamsg_index = i
+                if deltamsg.ticks >= ticks_f: break
+                i += 1
+                if deltamsg.ticks < ticks_i: continue
+                if types != None and deltamsg.type() not in types: continue
+                if note_i != None and deltamsg.has_note() and not note_i <= deltamsg.note() <= note_f: continue
+                result.append(Ref(self, track_index, deltamsg_index))
+        return result
+
     def filterleave(self, types):
         'Filter each track for specified types, then interleave them. Useful to get all events of a specific type into one track.'
         return interleave(i.filter(types) for i in self.tracks)
+
+class Ref:
+    def __init__(self, song, track, i):
+        self.song = song
+        self.track = track
+        self.i = i
+        self.deltamsg = None
+
+    def __call__(self):
+        if self.deltamsg:
+            return self.deltamsg
+        else:
+            return self.track()[self.i]
+
+    def track(self):
+        return self.song.tracks[self.track]
+
+    def remove(self):
+        self.denorm()
+        if self.deltamsg.note_end:
+            self.deltamsg.note_end.remove()
+        del self.track()[self.i]
+        self.track()[self.i].redelta()
+        self.i = None
+
+    def denorm(self):
+        self.deltamsg = self()
+        if self.deltamsg.note_end:
+            self.deltamsg.note_end.denorm()
+
+    def renorm(self, i=None):
+        if i != None:
+            self.i = i
+        else:
+            self.i = self.track().find(id(self.deltamsg), self.deltamsg.ticks)
+        self.deltamsg = None
+        if self().note_end:
+            self().note_end.renorm()
 
 class TrackIter:
     'Track iterator that makes it easier to coordinate iteration over multiple tracks.'
