@@ -234,6 +234,7 @@ class Song:
                 file.write(track_header + bytes(track_bytes))
 
     def load(self, file_path=None, file_bytes=None):
+        # arg checks
         if file_path and file_bytes:
             raise Exception('cannot specify file more than one way')
         if file_path:
@@ -243,34 +244,42 @@ class Song:
         else:
             raise Exception('must specify file')
         # get chunks
-        header_length = 14
-        header_title = b'MThd'
-        if len(file_bytes) < header_length:
-            raise Exception('header too short')
-        if file_bytes[0:len(header_title)] != header_title:
-            raise(Exception(f'header title should be {header_title}, but got {file_bytes[0:len(header_title)]}'))
-        chunks = [file_bytes[:header_length]]
-        track_header_size = 8
-        track_title = b'MTrk'
-        index = header_length
-        while len(file_bytes) >= index + track_header_size:
-            if file_bytes[index:index+len(track_title)] != track_title:
-                raise Exception('bad track header')
+        index = 0
+        chunks = []
+        chunk_id_size = 4
+        chunk_size_size = 4
+        chunk_id_header = b'MThd'
+        chunk_id_track = b'MTrk'
+        # get header chunk
+        header_size = chunk_id_size + chunk_size_size + 6
+        if len(file_bytes) < header_size:
+            raise Exception('first chunk too short')
+        chunk_id = file_bytes[:chunk_id_size]
+        if chunk_id != chunk_id_header:
+            raise(Exception(f'first chunk ID should be {chunk_id_header}, but got {chunk_id}'))
+        chunks.append(file_bytes[:header_size])
+        index += header_size
+        # get track chunks
+        while True:
+            index_data = index + chunk_id_size + chunk_size_size
+            if len(file_bytes) < index_data: break
+            chunk_id = file_bytes[index:index+len(chunk_id_size)]
+            if chunk_id != chunk_id_track:
+                raise Exception('chunk ID should be {chunk_id_track}, but got {chunk_id}')
             track_size = int.from_bytes(file_bytes[index+4:index+8], 'big')
-            if len(file_bytes) < index + track_header_size + track_size:
+            track_end = index_data + track_size
+            if len(file_bytes) < track_end:
                 raise Exception('track too long')
-            chunks.append(file_bytes[index:index+track_header_size+track_size])
-            index += track_header_size + track_size
+            chunks.append(file_bytes[index:track_end])
+            index = track_end
         if index != len(file_bytes): raise Exception('malformed tracks')
-        if int.from_bytes(file_bytes[10:12], 'big') != len(chunks) - 1:
-            raise Exception('bad size')
-        # handle chunk 0
-        self.ticks_per_quarter = int.from_bytes(chunks[0][12:14], 'big')
+        # handle header chunk
         if int.from_bytes(chunks[0][8:10], 'big') != 1:
             raise Exception('unhandled file type')
         if int.from_bytes(chunks[0][10:12], 'big') != len(chunks) - 1:
             raise Exception('wrong number of tracks')
-        # turn other chunks into a tracks
+        self.ticks_per_quarter = int.from_bytes(chunks[0][12:14], 'big')
+        # handle track chunks
         self.tracks.clear()
         for chunk in chunks[1:]:
             track = Track()
