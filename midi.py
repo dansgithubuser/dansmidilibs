@@ -269,6 +269,12 @@ class Song:
         if file_path or file_bytes:
             self.load(file_path, file_bytes)
 
+    def __getitem__(self, i):
+        return self.tracks[i]
+
+    def __len__(self):
+        return len(self.tracks)
+
     def save(self, file_path):
         with open(file_path, 'wb') as file:
             header = (
