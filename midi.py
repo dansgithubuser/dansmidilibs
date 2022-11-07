@@ -285,11 +285,12 @@ class Track:
         self.redelta(i+1)
         return i
 
-    def find(self, deltamsg_id, ticks):
+    def find(self, ticks, deltamsg_id=None):
         i = bisect.bisect_left(self.deltamsgs, ticks, key=lambda i: i.ticks)
-        while id(self[i]) != deltamsg_id:
-            i += 1
-            if i < 0: return
+        if deltamsg_id != None:
+            while id(self[i]) != deltamsg_id:
+                i += 1
+                if i < 0: return
         return i
 
     def filter(self, predicate):
@@ -517,7 +518,7 @@ class Ref:
         if deltamsg_index != None:
             self.deltamsg_index = deltamsg_index
         else:
-            self.deltamsg_index = self.track().find(id(self.deltamsg), self.deltamsg.ticks)
+            self.deltamsg_index = self.track().find(self.deltamsg.ticks, id(self.deltamsg))
         self.deltamsg = None
         if self().note_end:
             self().note_end.renorm()
