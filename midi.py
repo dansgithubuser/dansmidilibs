@@ -205,7 +205,10 @@ class Deltamsg(Msg):
             self.note_end = None
 
     def __str__(self):
-        return f'<{self.delta}; {Msg.__str__(self, bare=True)}>'
+        return f'<{self.delta}; {self.msg_str()}>'
+
+    def msg_str(self, bare=True):
+        return Msg.__str__(self, bare)
 
     def set_note_end(self, note_end):
         assert note_end().is_note_end()
