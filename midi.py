@@ -557,15 +557,28 @@ class TrackIter:
             deltamsg = self.track[self.i]
             self.i += 1
             self.ticks_last += deltamsg.delta
-            if interleave: return Deltamsg(delta, deltamsg.msg)
+            if interleave: return Deltamsg(delta, deltamsg.bytes)
             return deltamsg
+
+class SongIter:
+    'Song iterator to iterate over events in multiple tracks.'
+
+    def __init__(self, song):
+        self.iters = [TrackIter(track) for track in song]
+
+    def __iter__(self):
+        while not all(i.stopped() for i in self.iters):
+            delta = min(i.delta() for i in self.iters)
+            for j in [i.advance(delta) for i in self.iters]:
+                if deltamsg := j:
+                    yield deltamsg
 
 def interleave(*tracks):
     'Turn many tracks into one.'
     result = Track()
     iters = [TrackIter(i) for i in tracks]
     while not all(i.stopped() for i in iters):
-        delta = min(i.delta for i in iters)
+        delta = min(i.delta() for i in iters)
         first = True
         for j in [i.advance(delta, True) for i in iters]:
             if deltamsg := j:
