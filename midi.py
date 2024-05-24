@@ -92,6 +92,9 @@ class Msg:
         if self.type_nibble() == 0x90 and self.bytes[2] == 0: return True
         return False
 
+    def is_note(self):
+        return self.type_nibble() in [0x80, 0x90]
+
     def controller(self):
         assert self.is_control_change()
         return self.bytes[1]
@@ -279,8 +282,8 @@ class Track:
         deltamsg.delta = deltamsg.ticks - ticks
 
     def add(self, msg, ticks):
-        if not self.deltamsgs: self.append(Deltamsg(msg, ticks, ticks))
-        deltamsg = Deltamsg(msg, None, ticks)
+        if not self.deltamsgs: self.append(Deltamsg(ticks, msg.bytes))
+        deltamsg = Deltamsg(None, msg.bytes, ticks)
         key = lambda i: [i.ticks, *i.bytes]
         i = bisect.bisect(self.deltamsgs, key(deltamsg), key=key)
         self.deltamsgs.insert(i, deltamsg)
@@ -302,8 +305,26 @@ class Track:
         for deltamsg in self:
             delta += deltamsg.delta
             if predicate(deltamsg):
-                result.append(Deltamsg(delta, deltamsg.msg))
+                result.append(Deltamsg(delta, deltamsg.bytes))
                 delta = 0
+        return result
+
+    def split(self, ticks=1):
+        notes = set()
+        rest = 0
+        result = [[]]
+        for deltamsg in self:
+            if not notes:
+                rest += deltamsg.delta
+            else:
+                rest = 0
+            if rest > ticks and result[-1]:
+                result.append([])
+            if deltamsg.is_note_start():
+                notes.add(deltamsg.note())
+            elif deltamsg.is_note_end():
+                notes.remove(deltamsg.note())
+            result[-1].append(deltamsg)
         return result
 
 class Song:
@@ -588,7 +609,7 @@ def interleave(*tracks):
                     result.append(deltamsg)
                 else:
                     # these msgs happen at the same time, so zero delta
-                    result.append(Deltamsg(0, deltamsg.msg))
+                    result.append(Deltamsg(0, deltamsg.bytes))
     return result
 
 def print_vertical(*tracks):
