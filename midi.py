@@ -507,7 +507,7 @@ class Song:
 
     def filterleave(self, predicate):
         'Filter each track, then interleave them. Useful to get all msgs of a specific type into one track.'
-        return interleave(i.filter(predicate) for i in self.tracks)
+        return interleave(*[i.filter(predicate) for i in self.tracks])
 
 class Ref:
     def __init__(self, song, track_index, deltamsg_index):
